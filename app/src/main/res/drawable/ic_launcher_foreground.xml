@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer film canister body (centered within 66dp safe area: X:26 to 82, Y:26 to 82) -->
+    <!-- Film canister top spindle -->
+    <path
+        android:fillColor="#8C8885"
+        android:pathData="M50,25h8v4h-8z" />
+    <!-- Film canister body -->
+    <path
+        android:fillColor="#211E1D"
+        android:strokeColor="#5E5854"
+        android:strokeWidth="1.5"
+        android:pathData="M34,29h40c2.2,0 4,1.8 4,4v42c0,2.2 -1.8,4 -4,4h-40c-2.2,0 -4,-1.8 -4,-4v-42c0,-2.2 1.8,-4 4,-4z" />
+    <!-- Kodachrome iconic warm gold & red film label stripe -->
+    <path
+        android:fillColor="#E5A93C"
+        android:pathData="M34,36h40v18h-40z" />
+    <path
+        android:fillColor="#D32F2F"
+        android:pathData="M34,54h40v6h-40z" />
+    <!-- Film strip leader extending to the right -->
+    <path
+        android:fillColor="#1E1E1E"
+        android:strokeColor="#7E7771"
+        android:strokeWidth="1.2"
+        android:pathData="M74,42h11c1.5,0 3,1.2 3,2.8v16.4c0,1.6 -1.5,2.8 -3,2.8h-11z" />
+    <!-- Film sprocket perforations -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M77,44h3v4h-3z M83,44h3v4h-3z M77,56h3v4h-3z M83,56h3v4h-3z" />
+    <!-- "64" / Analog circle badge in center of canister -->
+    <path
+        android:fillColor="#1A1817"
+        android:pathData="M54,45m-7,0a7,7 0,1 1,14 0a7,7 0,1 1,-14 0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,45m-3,0a3,3 0,1 1,6 0a3,3 0,1 1,-6 0" />
+</vector>
