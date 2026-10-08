@@ -33,12 +33,10 @@ object FilmEngine {
 
     private fun buildLookupTables() {
         // Pre-compute Kodachrome 64 tone curves:
-        // C1-continuous reversal slide film S-curve with ZERO discontinuities or banding.
-        // Recreates authentic K-14 characteristics:
+        // C1-continuous reversal slide film S-curve with authentic K-14 positive contrast:
         // - Deep velvety blacks (high D-Max)
-        // - Rich golden-amber highlights
-        // - Natural warm midtone saturation
-        // - Subtle cyan/cool undertones in deep shadows
+        // - Punchy midtone separation
+        // - Smooth highlight rolloff
         for (i in 0..255) {
             val x = i / 255.0
 
@@ -51,23 +49,20 @@ object FilmEngine {
             }
 
             // RED CHANNEL:
-            // Kodachrome reds are rich, warm, and luminous.
-            // Gentle bell-shaped warmth across midtones
-            val rWarm = (sCurve + 0.045 * sin(x * Math.PI)).coerceIn(0.0, 1.0)
+            // High contrast with gentle midtone bell curve warmth
+            val rWarm = (sCurve + 0.035 * sin(x * Math.PI)).coerceIn(0.0, 1.0)
             kodachromeRedLut[i] = (rWarm * 255.0).toInt().coerceIn(0, 255)
 
             // GREEN CHANNEL:
             // Balanced analog midtone response
-            val gBalanced = (sCurve + 0.012 * sin(x * Math.PI)).coerceIn(0.0, 1.0)
+            val gBalanced = (sCurve + 0.010 * sin(x * Math.PI)).coerceIn(0.0, 1.0)
             kodachromeGreenLut[i] = (gBalanced * 255.0).toInt().coerceIn(0, 255)
 
             // BLUE CHANNEL:
-            // Suppressed in highlights (giving the famous warm ivory/amber daylight cast),
-            // subtly lifted in deep shadows (x < 0.25) to emulate K-14 cool shadow bias.
-            val shadowCyanLift = if (x < 0.25) 0.025 * (1.0 - x / 0.25) else 0.0
-            val highlightWarmSuppression = if (x > 0.35) 0.055 * ((x - 0.35) / 0.65).pow(1.15) else 0.0
-            val bVintage = (sCurve + shadowCyanLift - highlightWarmSuppression).coerceIn(0.0, 1.0)
-            kodachromeBlueLut[i] = (bVintage * 255.0).toInt().coerceIn(0, 255)
+            // High slide film contrast curve with deep shadows and clean highlight density
+            val shadowCoolLift = if (x < 0.20) 0.018 * (1.0 - x / 0.20) else 0.0
+            val bCurve = (sCurve + shadowCoolLift).coerceIn(0.0, 1.0)
+            kodachromeBlueLut[i] = (bCurve * 255.0).toInt().coerceIn(0, 255)
 
             // Ilford HP5 Plus contrast curve:
             // High micro-contrast pushed B&W negative curve with deep D-Max blacks and silvery highlights
@@ -166,8 +161,11 @@ object FilmEngine {
 
     /**
      * Authentic Kodachrome 64 processing:
-     * - Smooth, continuous K-14 tone transfer with zero banding.
-     * - Warm golden highlights, lush red/yellow saturation, deep clean shadows.
+     * - Iconic K-14 dye coupler spectral response:
+     *   * Blue Sky & Cerulean tones: Deep, saturated, rich cobalt blue with red absorption
+     *     (eliminating digital haze and pale purplish wash).
+     *   * Warm tones: Saturated vermilion reds, amber golds, and healthy skin tones.
+     *   * Neutral highlights: Subtle 5500K daylight ivory glow.
      * - Fine organic dye cloud grain (ISO 64).
      */
     private fun processKodachromeChunk(
@@ -192,31 +190,50 @@ object FilmEngine {
                 val g = (pixel ushr 8) and 0xFF
                 val b = pixel and 0xFF
 
-                // Step 1: Apply calibrated K-14 S-curves
+                // Step 1: Apply calibrated K-14 reversal S-curves
                 val curveR = kodachromeRedLut[r]
                 val curveG = kodachromeGreenLut[g]
                 val curveB = kodachromeBlueLut[b]
 
-                // Step 2: Kodachrome dye saturation & warm cross-talk
-                var filmR = curveR
-                var filmG = curveG
-                var filmB = curveB
+                var filmR = curveR.toFloat()
+                var filmG = curveG.toFloat()
+                var filmB = curveB.toFloat()
 
-                val warmDelta = curveR - curveB
-                if (warmDelta > 0) {
-                    // Enrich warm reds and golden yellows (Kodachrome signature)
-                    filmR = min(255, (filmR + warmDelta * 0.10f).toInt())
-                    filmB = max(0, (filmB - warmDelta * 0.05f).toInt())
+                // Step 2: Authentic K-14 Tri-Pack Spectral Dye Coupling
+                if (b > r) {
+                    // BLUE & CERULEAN SPECTRUM (Sky, Ocean, Denim):
+                    // In real Kodachrome, the cyan dye layer absorbs red light strongly.
+                    // Digital sensors capture blue skies with excessive red pollution (~80-120),
+                    // producing a pale or purplish digital wash.
+                    // Kodachrome absorbs the red to render the iconic, deep, punchy cobalt/cerulean sky:
+                    val blueDominance = (b - r).toFloat()
+                    filmR = (filmR - blueDominance * 0.28f).coerceAtLeast(0f)
+                    filmG = (filmG - blueDominance * 0.03f).coerceAtLeast(0f)
+                    filmB = (filmB + blueDominance * 0.08f).coerceAtMost(255f)
                 } else {
-                    // Subtle cool cyan bias in cool tones and sky
-                    val coolDelta = -warmDelta
-                    filmB = min(255, (filmB + coolDelta * 0.04f).toInt())
+                    // WARM SPECTRUM (Reds, Oranges, Yellows, Sunsets, Skin):
+                    // Saturated, rich, vibrant Kodak warm tones:
+                    val warmDominance = (r - b).toFloat()
+                    filmR = (filmR + warmDominance * 0.12f).coerceAtMost(255f)
+                    filmG = (filmG + warmDominance * 0.03f).coerceAtMost(255f)
+                    filmB = (filmB - warmDominance * 0.06f).coerceAtLeast(0f)
+                }
+
+                // Daylight Highlight Warmth (5500K daylight balance):
+                // Applied only to bright, near-neutral highlights (e.g. sunlit clouds, white surfaces),
+                // completely preserving pure saturated blue skies:
+                val lum = (filmR * 299f + filmG * 587f + filmB * 114f) / 1000f
+                if (lum > 195f) {
+                    val neutralWeight = (1.0f - abs(r - b) / 90f).coerceAtLeast(0f)
+                    val highlightWeight = ((lum - 195f) / 60f).coerceIn(0f, 1f)
+                    val warmGlow = highlightWeight * neutralWeight * 7f
+                    filmR = (filmR + warmGlow).coerceAtMost(255f)
+                    filmG = (filmG + warmGlow * 0.45f).coerceAtMost(255f)
+                    filmB = (filmB - warmGlow * 0.55f).coerceAtLeast(0f)
                 }
 
                 // Step 3: Fine organic dye cloud grain (ISO 64 is extremely fine)
-                val lum = (filmR * 299 + filmG * 587 + filmB * 114) / 1000
-                // Dye clouds are concentrated around midtones (bell curve), fading in pure white/black
-                val midtoneWeight = (1.0f - abs(lum - 128) / 128f).coerceAtLeast(0f)
+                val midtoneWeight = (1.0f - abs(lum - 128f) / 128f).coerceAtLeast(0f)
 
                 // High-speed XorShift random step
                 rngState = rngState xor (rngState shl 13)
@@ -224,12 +241,12 @@ object FilmEngine {
                 rngState = rngState xor (rngState shl 5)
 
                 val noiseVal = ((rngState and 0x7FFF) % 25) - 12 // Range [-12, +12]
-                val dyeGrain = (noiseVal * midtoneWeight * 0.55f).toInt()
+                val dyeGrain = noiseVal * midtoneWeight * 0.48f
 
-                // Apply dye cloud modulation uniformly across channels to avoid digital chromatic noise
-                filmR = (filmR + dyeGrain).coerceIn(0, 255)
-                filmG = (filmG + dyeGrain).coerceIn(0, 255)
-                filmB = (filmB + dyeGrain).coerceIn(0, 255)
+                // Uniform luminance modulation avoids digital chromatic noise
+                filmR = (filmR + dyeGrain).coerceIn(0f, 255f)
+                filmG = (filmG + dyeGrain).coerceIn(0f, 255f)
+                filmB = (filmB + dyeGrain).coerceIn(0f, 255f)
 
                 // Step 4: Blend with original based on intensity
                 val outR = (r + (filmR - r) * intensity).toInt().coerceIn(0, 255)

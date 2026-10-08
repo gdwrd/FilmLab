@@ -40,7 +40,7 @@ data class FilmLabUiState(
     val intensity: Float = 1.0f,
     val isComparing: Boolean = false,
     val isProcessing: Boolean = false,
-    val activeSampleId: String? = "golden_coastal",
+    val activeSampleId: String? = null,
     val imageWidth: Int = 2048,
     val imageHeight: Int = 1365,
     val saveStatus: SaveStatus = SaveStatus.Idle,
@@ -55,8 +55,7 @@ class FilmLabViewModel(application: Application) : AndroidViewModel(application)
     private var filterJob: Job? = null
 
     init {
-        // Load initial default sample (Golden Coastal) to showcase Kodachrome right away
-        loadSample("golden_coastal")
+        // App launches cleanly ready for the user's gallery photo
     }
 
     fun loadSample(sampleId: String) {
