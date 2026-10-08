@@ -80,14 +80,31 @@ class ExampleRobolectricTest {
     // Process with Kodachrome
     val processed = FilmEngine.applyFilmFilter(rampBitmap, FilmPreset.KODACHROME_64, 1.0f)
 
-    // Verify there are no massive step jumps (like the previous broken jump of >100 at x=128)
+    // Verify there are no massive step jumps
     var prevRed = Color.red(processed.getPixel(0, 5))
     for (x in 1 until width) {
       val curRed = Color.red(processed.getPixel(x, 5))
       val delta = abs(curRed - prevRed)
-      // Consecutive steps in a 256-wide gradient must be smooth (< 15 including fine grain)
       assertTrue("Step jump too large at x=$x (delta=$delta, prev=$prevRed, cur=$curRed)", delta < 15)
       prevRed = curRed
     }
+  }
+
+  @Test
+  fun testKodachromeBlueSkyResponse() = runBlocking {
+    // Typical digital camera blue sky: R=100, G=160, B=230 (slightly hazy/red polluted)
+    val testBitmap = Bitmap.createBitmap(50, 50, Bitmap.Config.ARGB_8888)
+    testBitmap.eraseColor(Color.rgb(100, 160, 230))
+
+    val processed = FilmEngine.applyFilmFilter(testBitmap, FilmPreset.KODACHROME_64, 1.0f)
+    val outPixel = processed.getPixel(25, 25)
+    val outR = Color.red(outPixel)
+    val outG = Color.green(outPixel)
+    val outB = Color.blue(outPixel)
+
+    // Kodachrome cyan dye coupler suppresses red pollution in skies to yield deep cobalt/cerulean blue
+    assertTrue("Red channel in blue sky should be suppressed (got $outR)", outR < 90)
+    assertTrue("Blue channel should remain rich and vibrant (got $outB)", outB > 220)
+    assertTrue("Blue dominance should be preserved or enhanced (B > R)", outB > outR + 100)
   }
 }

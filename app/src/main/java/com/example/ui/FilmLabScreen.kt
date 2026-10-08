@@ -1,13 +1,9 @@
 package com.example.ui
 
-import android.app.Activity
 import android.graphics.Bitmap
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -28,9 +24,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,26 +35,19 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.SaveAlt
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -83,7 +69,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.film.FilmEngine
 import com.example.film.FilmPreset
 import com.example.ui.theme.DarkroomBlack
 import com.example.ui.theme.DarkroomSurface
@@ -93,10 +78,8 @@ import com.example.ui.theme.DarkroomTextMuted
 import com.example.ui.theme.DarkroomTextPrimary
 import com.example.ui.theme.DarkroomTextSecondary
 import com.example.ui.theme.IlfordCardBg
-import com.example.ui.theme.IlfordSilver
 import com.example.ui.theme.KodachromeAmber
 import com.example.ui.theme.KodachromeCardBg
-import com.example.ui.theme.SuccessGreen
 
 @Composable
 fun FilmLabScreen(
@@ -115,6 +98,8 @@ fun FilmLabScreen(
             viewModel.onImagePicked(uri)
         }
     }
+
+    val hasPhoto = uiState.baseBitmap != null
 
     // Handle save status notifications
     LaunchedEffect(uiState.saveStatus) {
@@ -142,12 +127,10 @@ fun FilmLabScreen(
                 .statusBarsPadding()
                 .navigationBarsPadding()
         ) {
-            // Minimalist Top Bar
+            // Minimalist Top Bar (App Title & Save button)
             FilmLabTopBar(
-                imageWidth = uiState.imageWidth,
-                imageHeight = uiState.imageHeight,
+                hasPhoto = hasPhoto,
                 onInfoClick = { viewModel.toggleInfoSheet(true) },
-                onShareClick = { viewModel.shareImage(context) },
                 onSaveClick = { viewModel.saveToGallery(context) },
                 isSaving = uiState.saveStatus is SaveStatus.Saving
             )
@@ -170,23 +153,27 @@ fun FilmLabScreen(
                     imageWidth = uiState.imageWidth,
                     imageHeight = uiState.imageHeight,
                     onCompareStart = { viewModel.setComparing(true) },
-                    onCompareEnd = { viewModel.setComparing(false) }
+                    onCompareEnd = { viewModel.setComparing(false) },
+                    onPickPhoto = {
+                        photoPickerLauncher.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    }
                 )
             }
 
-            // Bottom Control Dock: Intensity slider, presets, photo picker
+            // Bottom Control Dock: Intensity slider, presets, and full-width Choose Photo button
             FilmControlDock(
+                hasPhoto = hasPhoto,
                 selectedPreset = uiState.selectedPreset,
                 intensity = uiState.intensity,
-                activeSampleId = uiState.activeSampleId,
                 onPresetSelected = { viewModel.selectPreset(it) },
                 onIntensityChange = { viewModel.setIntensity(it) },
                 onPickPhoto = {
                     photoPickerLauncher.launch(
                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                     )
-                },
-                onSelectSample = { viewModel.loadSample(it) }
+                }
             )
         }
 
@@ -198,7 +185,7 @@ fun FilmLabScreen(
                 .padding(bottom = 96.dp)
         )
 
-        // Film Calibration Info Dialog
+        // Film Calibration Info Dialog (opened by tapping app title)
         if (uiState.showInfoSheet) {
             FilmInfoDialog(
                 onDismiss = { viewModel.toggleInfoSheet(false) }
@@ -209,10 +196,8 @@ fun FilmLabScreen(
 
 @Composable
 fun FilmLabTopBar(
-    imageWidth: Int,
-    imageHeight: Int,
+    hasPhoto: Boolean,
     onInfoClick: () -> Unit,
-    onShareClick: () -> Unit,
     onSaveClick: () -> Unit,
     isSaving: Boolean
 ) {
@@ -224,10 +209,14 @@ fun FilmLabTopBar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        // App Title & Analog Scan Badge
+        // App Title & Analog Scan Badge (Pressing opens Film Optics & Calibration info)
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.clickable { onInfoClick() }
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .clickable { onInfoClick() }
+                .padding(vertical = 4.dp, horizontal = 2.dp)
+                .testTag("app_title_info_trigger")
         ) {
             Text(
                 text = "FILMLAB",
@@ -254,72 +243,40 @@ fun FilmLabTopBar(
             }
         }
 
-        // Action Icons
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        // Save to Gallery Button
+        Button(
+            onClick = onSaveClick,
+            enabled = hasPhoto && !isSaving,
+            shape = RoundedCornerShape(8.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = KodachromeAmber,
+                contentColor = DarkroomBlack,
+                disabledContainerColor = DarkroomSurfaceElevated,
+                disabledContentColor = DarkroomTextMuted
+            ),
+            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+            modifier = Modifier
+                .height(36.dp)
+                .testTag("save_button")
         ) {
-            IconButton(
-                onClick = onInfoClick,
-                modifier = Modifier
-                    .size(44.dp)
-                    .testTag("info_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Info,
-                    contentDescription = "Film Chemistry & Resolution Info",
-                    tint = DarkroomTextSecondary
+            if (isSaving) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = DarkroomTextPrimary
                 )
-            }
-
-            IconButton(
-                onClick = onShareClick,
-                modifier = Modifier
-                    .size(44.dp)
-                    .testTag("share_button")
-            ) {
+            } else {
                 Icon(
-                    imageVector = Icons.Default.Share,
-                    contentDescription = "Share 35mm Scan",
-                    tint = DarkroomTextSecondary
+                    imageVector = Icons.Default.SaveAlt,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
                 )
-            }
-
-            // Save to Gallery Button
-            Button(
-                onClick = onSaveClick,
-                enabled = !isSaving,
-                shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = KodachromeAmber,
-                    contentColor = DarkroomBlack,
-                    disabledContainerColor = DarkroomSurfaceElevated,
-                    disabledContentColor = DarkroomTextMuted
-                ),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                modifier = Modifier
-                    .height(36.dp)
-                    .testTag("save_button")
-            ) {
-                if (isSaving) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        strokeWidth = 2.dp,
-                        color = DarkroomTextPrimary
-                    )
-                } else {
-                    Icon(
-                        imageVector = Icons.Default.SaveAlt,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Save",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Save",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
     }
@@ -336,14 +293,62 @@ fun FilmViewport(
     imageWidth: Int,
     imageHeight: Int,
     onCompareStart: () -> Unit,
-    onCompareEnd: () -> Unit
+    onCompareEnd: () -> Unit,
+    onPickPhoto: () -> Unit
 ) {
     if (baseBitmap == null) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
+        // Minimalist Darkroom Empty State
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1.25f)
+                .border(1.dp, DarkroomSurfaceBorder, RoundedCornerShape(12.dp))
+                .clip(RoundedCornerShape(12.dp))
+                .clickable { onPickPhoto() }
+                .testTag("empty_viewport"),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = DarkroomSurface)
         ) {
-            CircularProgressIndicator(color = KodachromeAmber)
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Surface(
+                    color = DarkroomSurfaceElevated,
+                    shape = CircleShape,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DarkroomSurfaceBorder),
+                    modifier = Modifier.size(60.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.PhotoCamera,
+                            contentDescription = "Camera",
+                            tint = KodachromeAmber,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(14.dp))
+                Text(
+                    text = "NO PHOTO LOADED",
+                    color = DarkroomTextPrimary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 1.sp
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Tap anywhere or use the button below\nto select a photo from your gallery",
+                    color = DarkroomTextSecondary,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
         }
         return
     }
@@ -507,13 +512,12 @@ fun FilmViewport(
 
 @Composable
 fun FilmControlDock(
+    hasPhoto: Boolean,
     selectedPreset: FilmPreset,
     intensity: Float,
-    activeSampleId: String?,
     onPresetSelected: (FilmPreset) -> Unit,
     onIntensityChange: (Float) -> Unit,
-    onPickPhoto: () -> Unit,
-    onSelectSample: (String) -> Unit
+    onPickPhoto: () -> Unit
 ) {
     Surface(
         color = DarkroomSurface,
@@ -532,16 +536,14 @@ fun FilmControlDock(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "EMULSION INTENSITY",
-                        color = DarkroomTextSecondary,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        letterSpacing = 1.sp
-                    )
-                }
+                Text(
+                    text = "EMULSION INTENSITY",
+                    color = DarkroomTextSecondary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    letterSpacing = 1.sp
+                )
 
                 Surface(
                     color = DarkroomSurfaceElevated,
@@ -563,10 +565,13 @@ fun FilmControlDock(
                 value = intensity,
                 onValueChange = onIntensityChange,
                 valueRange = 0f..1f,
+                enabled = hasPhoto,
                 colors = SliderDefaults.colors(
                     thumbColor = KodachromeAmber,
                     activeTrackColor = KodachromeAmber,
-                    inactiveTrackColor = DarkroomSurfaceBorder
+                    inactiveTrackColor = DarkroomSurfaceBorder,
+                    disabledThumbColor = DarkroomSurfaceBorder,
+                    disabledActiveTrackColor = DarkroomSurfaceBorder
                 ),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -618,71 +623,33 @@ fun FilmControlDock(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Section 3: Gallery Pick & Sample Photo Chips
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+            // Section 3: Full-width Choose Photo button with margin
+            Button(
+                onClick = onPickPhoto,
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = DarkroomSurfaceElevated,
+                    contentColor = DarkroomTextPrimary
+                ),
+                border = androidx.compose.foundation.BorderStroke(1.dp, DarkroomSurfaceBorder),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("upload_photo_button")
             ) {
-                // Upload Photo button
-                Button(
-                    onClick = onPickPhoto,
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = DarkroomSurfaceElevated,
-                        contentColor = DarkroomTextPrimary
-                    ),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, DarkroomSurfaceBorder),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
-                    modifier = Modifier.testTag("upload_photo_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.FolderOpen,
-                        contentDescription = "Upload Photo from Gallery",
-                        tint = KodachromeAmber,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Choose Photo",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(12.dp))
-
-                // Built-in Sample Photos quick toggles
-                LazyRow(
-                    modifier = Modifier.weight(1f),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    items(SamplePhotos.SAMPLES) { sample ->
-                        val isSelected = activeSampleId == sample.id
-                        FilterChip(
-                            selected = isSelected,
-                            onClick = { onSelectSample(sample.id) },
-                            label = {
-                                Text(
-                                    text = sample.title,
-                                    fontSize = 11.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                )
-                            },
-                            colors = FilterChipDefaults.filterChipColors(
-                                containerColor = DarkroomSurfaceElevated,
-                                labelColor = DarkroomTextSecondary,
-                                selectedContainerColor = KodachromeCardBg,
-                                selectedLabelColor = KodachromeAmber
-                            ),
-                            border = FilterChipDefaults.filterChipBorder(
-                                enabled = true,
-                                selected = isSelected,
-                                borderColor = DarkroomSurfaceBorder,
-                                selectedBorderColor = KodachromeAmber
-                            )
-                        )
-                    }
-                }
+                Icon(
+                    imageVector = Icons.Default.FolderOpen,
+                    contentDescription = "Upload Photo from Gallery",
+                    tint = KodachromeAmber,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (hasPhoto) "Choose Another Photo" else "Choose Photo",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 0.5.sp
+                )
             }
         }
     }
@@ -705,6 +672,7 @@ fun FilmPresetCard(
 
     Card(
         modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
             .clickable { onClick() }
             .border(
                 width = if (isSelected) 1.5.dp else 1.dp,
