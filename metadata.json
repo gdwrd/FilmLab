@@ -1,0 +1,6 @@
+{
+  "name": "FilmLab",
+  "description": "Vintage analog film simulation featuring calibrated Kodachrome 64 and Ilford HP5 presets with precision grain structure.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
