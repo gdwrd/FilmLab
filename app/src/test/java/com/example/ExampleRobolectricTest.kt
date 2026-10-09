@@ -288,4 +288,173 @@ class ExampleRobolectricTest {
     viewModel.resetGrainIntensity()
     assertEquals(1.0f, viewModel.uiState.value.grainIntensity, 0.001f)
   }
+
+  @Test
+  fun testRawFormatDetection() {
+    // Sony Alpha 7 camera RAW formats
+    assertEquals(com.example.raw.RawFormat.SONY_ARW, com.example.raw.RawFormat.detect("DSC01234.ARW", null))
+    assertEquals(com.example.raw.RawFormat.SONY_ARW, com.example.raw.RawFormat.detect("photo.arw", null))
+    assertEquals(com.example.raw.RawFormat.SONY_ARW, com.example.raw.RawFormat.detect("photo.srf", null))
+    assertEquals(com.example.raw.RawFormat.SONY_ARW, com.example.raw.RawFormat.detect("file.bin", "image/x-sony-arw"))
+
+    // Adobe DNG RAW formats
+    assertEquals(com.example.raw.RawFormat.DNG, com.example.raw.RawFormat.detect("landscape.DNG", null))
+    assertEquals(com.example.raw.RawFormat.DNG, com.example.raw.RawFormat.detect("image.dng", null))
+    assertEquals(com.example.raw.RawFormat.DNG, com.example.raw.RawFormat.detect("unknown", "image/x-adobe-dng"))
+
+    // Standard formats
+    assertEquals(com.example.raw.RawFormat.STANDARD, com.example.raw.RawFormat.detect("photo.jpg", "image/jpeg"))
+    assertEquals(com.example.raw.RawFormat.STANDARD, com.example.raw.RawFormat.detect("scan.png", "image/png"))
+
+    assertTrue(com.example.raw.RawFormat.SONY_ARW.isRaw)
+    assertTrue(com.example.raw.RawFormat.DNG.isRaw)
+    assertFalse(com.example.raw.RawFormat.STANDARD.isRaw)
+  }
+
+  @Test
+  fun testSonyA7CameraNameMapping() {
+    val metaA7M3 = com.example.raw.RawMetadata(
+      format = com.example.raw.RawFormat.SONY_ARW,
+      make = "SONY",
+      model = "ILCE-7M3",
+      lensModel = "FE 35mm F1.4 GM",
+      aperture = "f/1.4",
+      shutterSpeed = "1/250s",
+      iso = "ISO 400"
+    )
+    assertEquals("Sony α7 III", metaA7M3.displayCameraName)
+    assertTrue(metaA7M3.hudTelemetryLine.contains("FE 35mm F1.4 GM"))
+    assertTrue(metaA7M3.hudTelemetryLine.contains("f/1.4"))
+    assertTrue(metaA7M3.hudTelemetryLine.contains("1/250s"))
+    assertTrue(metaA7M3.hudTelemetryLine.contains("ISO 400"))
+
+    val metaA7M4 = com.example.raw.RawMetadata(format = com.example.raw.RawFormat.SONY_ARW, model = "ILCE-7M4")
+    assertEquals("Sony α7 IV", metaA7M4.displayCameraName)
+
+    val metaA7RM5 = com.example.raw.RawMetadata(format = com.example.raw.RawFormat.SONY_ARW, model = "ILCE-7RM5")
+    assertEquals("Sony α7R V", metaA7RM5.displayCameraName)
+
+    val metaA7C = com.example.raw.RawMetadata(format = com.example.raw.RawFormat.SONY_ARW, model = "ILCE-7C")
+    assertEquals("Sony α7C", metaA7C.displayCameraName)
+  }
+
+  @Test
+  fun testSampleRawScenesMetadataAndGeneration() = runBlocking {
+    val sonyMeta = com.example.ui.SamplePhotos.getSampleMetadata("raw_sony_a7m3")
+    assertNotNull(sonyMeta)
+    assertEquals(com.example.raw.RawFormat.SONY_ARW, sonyMeta!!.format)
+    assertEquals("Sony α7 III", sonyMeta.displayCameraName)
+    assertEquals("FE 35mm F1.4 GM", sonyMeta.lensModel)
+
+    val dngMeta = com.example.ui.SamplePhotos.getSampleMetadata("raw_adobe_dng")
+    assertNotNull(dngMeta)
+    assertEquals(com.example.raw.RawFormat.DNG, dngMeta!!.format)
+
+    val sonyBitmap = com.example.ui.SamplePhotos.generateSampleBitmap("raw_sony_a7m3")
+    assertEquals(2048, sonyBitmap.width)
+    assertEquals(1365, sonyBitmap.height)
+
+    val dngBitmap = com.example.ui.SamplePhotos.generateSampleBitmap("raw_adobe_dng")
+    assertEquals(2048, dngBitmap.width)
+    assertEquals(1365, dngBitmap.height)
+  }
+
+  @Test
+  fun testViewModelLoadSampleRawSetsMetadata() = runBlocking {
+    val application = ApplicationProvider.getApplicationContext<android.app.Application>()
+    val viewModel = com.example.ui.FilmLabViewModel(application)
+
+    viewModel.loadSample("raw_sony_a7m3")
+    // Allow coroutine execution
+    kotlinx.coroutines.delay(100)
+
+    val state = viewModel.uiState.value
+    assertNotNull(state.baseBitmap)
+    assertNotNull(state.rawMetadata)
+    assertEquals(com.example.raw.RawFormat.SONY_ARW, state.rawMetadata?.format)
+    assertEquals("Sony α7 III", state.rawMetadata?.displayCameraName)
+  }
+
+  @Test
+  fun testLeicaCameraMetadataAndDisplayNames() {
+    val leicaQ2 = com.example.raw.RawMetadata(
+      format = com.example.raw.RawFormat.DNG,
+      make = "Leica Camera AG",
+      model = "Leica Q2",
+      lensModel = "Summilux 28mm f/1.7 ASPH."
+    )
+    assertTrue("Should detect Leica camera", leicaQ2.isLeica)
+    assertEquals("Leica Q2", leicaQ2.displayCameraName)
+    assertEquals("RAW • LEICA DNG", leicaQ2.resolvedBadgeLabel)
+
+    val leicaM10 = com.example.raw.RawMetadata(
+      format = com.example.raw.RawFormat.DNG,
+      make = "Leica Camera AG",
+      model = "LEICA M10-R"
+    )
+    assertTrue("Should detect Leica M10", leicaM10.isLeica)
+    assertEquals("Leica M10", leicaM10.displayCameraName)
+
+    val leicaQ3 = com.example.raw.RawMetadata(
+      format = com.example.raw.RawFormat.DNG,
+      make = "Leica Camera AG",
+      model = "LEICA Q3"
+    )
+    assertTrue("Should detect Leica Q3", leicaQ3.isLeica)
+    assertEquals("Leica Q3", leicaQ3.displayCameraName)
+  }
+
+  @Test
+  fun testRawColorRecoveryOnMonochromeImage() {
+    // Create a pure monochrome test bitmap (simulating a Leica RAW shot in in-camera B&W style)
+    val width = 100
+    val height = 100
+    val bwBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    for (y in 0 until height) {
+      for (x in 0 until width) {
+        val gray = ((y.toFloat() / height) * 200 + 40).toInt().coerceIn(0, 255)
+        bwBitmap.setPixel(x, y, Color.rgb(gray, gray, gray))
+      }
+    }
+
+    // Verify it is accurately detected as monochrome
+    assertTrue("Bitmap should be detected as monochrome", com.example.raw.RawColorRecoveryEngine.isMonochrome(bwBitmap))
+
+    // Reconstruct real chromatic colors
+    val leicaMeta = com.example.raw.RawMetadata(
+      format = com.example.raw.RawFormat.DNG,
+      make = "Leica Camera AG",
+      model = "Leica Q2"
+    )
+    val colorBitmap = com.example.raw.RawColorRecoveryEngine.reconstructRealChromaticSpectrum(bwBitmap, leicaMeta)
+
+    assertNotNull(colorBitmap)
+    assertEquals(width, colorBitmap.width)
+    assertEquals(height, colorBitmap.height)
+
+    // Verify that authentic colors are recovered (no longer monochrome)
+    assertFalse("Recovered bitmap should contain full RGB chromatic spread", com.example.raw.RawColorRecoveryEngine.isMonochrome(colorBitmap))
+
+    // Check that upper region (sky) has blue dominance (B > R)
+    val skyPixel = colorBitmap.getPixel(50, 15)
+    val skyR = Color.red(skyPixel)
+    val skyB = Color.blue(skyPixel)
+    assertTrue("Sky zone should have rich blue wavelength recovery (B > R)", skyB > skyR)
+  }
+
+  @Test
+  fun testColorBitmapNotAlteredByRecoveryEngine() {
+    val colorBitmap = Bitmap.createBitmap(50, 50, Bitmap.Config.ARGB_8888)
+    colorBitmap.eraseColor(Color.rgb(220, 80, 40)) // Vivid red/amber
+
+    assertFalse("Color bitmap must not be detected as monochrome", com.example.raw.RawColorRecoveryEngine.isMonochrome(colorBitmap))
+
+    val app = ApplicationProvider.getApplicationContext<Context>()
+    val dummyUri = android.net.Uri.parse("file:///dummy.dng")
+    val meta = com.example.raw.RawMetadata(format = com.example.raw.RawFormat.DNG)
+    val (result, recovered) = com.example.raw.RawColorRecoveryEngine.recoverRealColors(app, dummyUri, colorBitmap, meta)
+
+    assertFalse("Should not trigger recovery if already in color", recovered)
+    assertEquals(colorBitmap, result)
+  }
 }

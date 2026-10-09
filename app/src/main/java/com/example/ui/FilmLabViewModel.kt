@@ -15,6 +15,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.film.FilmEngine
 import com.example.film.FilmPreset
+import com.example.raw.RawImageDecoder
+import com.example.raw.RawMetadata
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,8 +46,10 @@ data class FilmLabUiState(
     val activeSampleId: String? = null,
     val imageWidth: Int = 2048,
     val imageHeight: Int = 1365,
+    val rawMetadata: RawMetadata? = null,
     val saveStatus: SaveStatus = SaveStatus.Idle,
-    val showInfoSheet: Boolean = false
+    val showInfoSheet: Boolean = false,
+    val showMetadataSheet: Boolean = false
 )
 
 class FilmLabViewModel(application: Application) : AndroidViewModel(application) {
@@ -57,7 +61,7 @@ class FilmLabViewModel(application: Application) : AndroidViewModel(application)
     private var grainDebounceJob: Job? = null
 
     init {
-        // App launches cleanly ready for the user's gallery photo
+        // App launches cleanly ready for the user's gallery photo or RAW files
     }
 
     fun loadSample(sampleId: String) {
@@ -66,6 +70,7 @@ class FilmLabViewModel(application: Application) : AndroidViewModel(application)
             val rawSample = withContext(Dispatchers.Default) {
                 SamplePhotos.generateSampleBitmap(sampleId)
             }
+            val metadata = SamplePhotos.getSampleMetadata(sampleId)
             val normalized = withContext(Dispatchers.Default) {
                 FilmEngine.normalizeTo35mmResolution(rawSample)
             }
@@ -74,6 +79,7 @@ class FilmLabViewModel(application: Application) : AndroidViewModel(application)
                     baseBitmap = normalized,
                     imageWidth = normalized.width,
                     imageHeight = normalized.height,
+                    rawMetadata = metadata,
                     activeSampleId = sampleId
                 )
             }
@@ -86,38 +92,26 @@ class FilmLabViewModel(application: Application) : AndroidViewModel(application)
             _uiState.update { it.copy(isProcessing = true, activeSampleId = null) }
             try {
                 val context = getApplication<Application>()
-                val loadedBitmap = withContext(Dispatchers.IO) {
-                    context.contentResolver.openInputStream(uri)?.use { stream ->
-                        BitmapFactory.decodeStream(stream)
-                    }
-                }
+                val decodeResult = RawImageDecoder.decodeImage(context, uri)
 
-                if (loadedBitmap != null) {
-                    val normalized = withContext(Dispatchers.Default) {
-                        FilmEngine.normalizeTo35mmResolution(loadedBitmap)
-                    }
-                    _uiState.update {
-                        it.copy(
-                            baseBitmap = normalized,
-                            imageWidth = normalized.width,
-                            imageHeight = normalized.height,
-                            activeSampleId = null
-                        )
-                    }
-                    recomputeFilmEffect(normalized, _uiState.value.selectedPreset, _uiState.value.grainIntensity)
-                } else {
-                    _uiState.update {
-                        it.copy(
-                            isProcessing = false,
-                            saveStatus = SaveStatus.Error("Failed to decode image from gallery")
-                        )
-                    }
+                val normalized = withContext(Dispatchers.Default) {
+                    FilmEngine.normalizeTo35mmResolution(decodeResult.bitmap)
                 }
+                _uiState.update {
+                    it.copy(
+                        baseBitmap = normalized,
+                        imageWidth = normalized.width,
+                        imageHeight = normalized.height,
+                        rawMetadata = decodeResult.metadata,
+                        activeSampleId = null
+                    )
+                }
+                recomputeFilmEffect(normalized, _uiState.value.selectedPreset, _uiState.value.grainIntensity)
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(
                         isProcessing = false,
-                        saveStatus = SaveStatus.Error("Error loading image: ${e.localizedMessage}")
+                        saveStatus = SaveStatus.Error("Error decoding photo/RAW file: ${e.localizedMessage}")
                     )
                 }
             }
@@ -162,6 +156,10 @@ class FilmLabViewModel(application: Application) : AndroidViewModel(application)
 
     fun toggleInfoSheet(show: Boolean) {
         _uiState.update { it.copy(showInfoSheet = show) }
+    }
+
+    fun toggleMetadataSheet(show: Boolean) {
+        _uiState.update { it.copy(showMetadataSheet = show) }
     }
 
     fun dismissSaveStatus() {
