@@ -38,6 +38,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Camera
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Compare
 import androidx.compose.material.icons.filled.FolderOpen
@@ -63,8 +64,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -86,6 +89,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.film.FilmPreset
+import com.example.raw.RawFormat
+import com.example.raw.RawMetadata
 import com.example.ui.theme.DarkroomBlack
 import com.example.ui.theme.DarkroomSurface
 import com.example.ui.theme.DarkroomSurfaceBorder
@@ -104,8 +109,9 @@ fun FilmLabScreen(
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val foldableLayout = rememberFoldableLayoutState()
+    var showImportDialog by remember { mutableStateOf(false) }
 
-    // Modern zero-permission Android Photo Picker
+    // Modern zero-permission Android Photo Picker for gallery images
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
@@ -113,6 +119,40 @@ fun FilmLabScreen(
             viewModel.onImagePicked(uri)
         }
     }
+
+    // Storage Access Framework Document Picker for RAW files (.DNG, Sony .ARW, etc.)
+    val rawDocumentPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.onImagePicked(uri)
+        }
+    }
+
+    val launchGalleryPicker = {
+        photoPickerLauncher.launch(
+            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+        )
+    }
+
+    val launchRawPicker = {
+        rawDocumentPickerLauncher.launch(
+            arrayOf(
+                "image/*",
+                "image/x-adobe-dng",
+                "image/x-sony-arw",
+                "image/arw",
+                "image/dng",
+                "image/x-raw",
+                "application/octet-stream",
+                "*/*"
+            )
+        )
+    }
+
+    val onPickPhoto = { showImportDialog = true }
+    val onPickRawDirect = { launchRawPicker() }
+    val onMetadataClick = { viewModel.toggleMetadataSheet(true) }
 
     val hasPhoto = uiState.baseBitmap != null
 
@@ -148,6 +188,7 @@ fun FilmLabScreen(
                         hasPhoto = hasPhoto,
                         foldableLayout = foldableLayout,
                         onInfoClick = { viewModel.toggleInfoSheet(true) },
+                        onMetadataClick = onMetadataClick,
                         onSaveClick = { viewModel.saveToGallery(context) },
                         onPresetSelected = { viewModel.selectPreset(it) },
                         onIntensityChange = { viewModel.setIntensity(it) },
@@ -155,11 +196,8 @@ fun FilmLabScreen(
                         onGrainReset = { viewModel.resetGrainIntensity() },
                         onCompareStart = { viewModel.setComparing(true) },
                         onCompareEnd = { viewModel.setComparing(false) },
-                        onPickPhoto = {
-                            photoPickerLauncher.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                            )
-                        },
+                        onPickPhoto = onPickPhoto,
+                        onPickRaw = onPickRawDirect,
                         onSelectSample = { sampleId -> viewModel.loadSample(sampleId) }
                     )
                 }
@@ -171,6 +209,7 @@ fun FilmLabScreen(
                         hasPhoto = hasPhoto,
                         foldableLayout = foldableLayout,
                         onInfoClick = { viewModel.toggleInfoSheet(true) },
+                        onMetadataClick = onMetadataClick,
                         onSaveClick = { viewModel.saveToGallery(context) },
                         onPresetSelected = { viewModel.selectPreset(it) },
                         onIntensityChange = { viewModel.setIntensity(it) },
@@ -178,11 +217,8 @@ fun FilmLabScreen(
                         onGrainReset = { viewModel.resetGrainIntensity() },
                         onCompareStart = { viewModel.setComparing(true) },
                         onCompareEnd = { viewModel.setComparing(false) },
-                        onPickPhoto = {
-                            photoPickerLauncher.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                            )
-                        },
+                        onPickPhoto = onPickPhoto,
+                        onPickRaw = onPickRawDirect,
                         onSelectSample = { sampleId -> viewModel.loadSample(sampleId) }
                     )
                 }
@@ -193,6 +229,7 @@ fun FilmLabScreen(
                         uiState = uiState,
                         hasPhoto = hasPhoto,
                         onInfoClick = { viewModel.toggleInfoSheet(true) },
+                        onMetadataClick = onMetadataClick,
                         onSaveClick = { viewModel.saveToGallery(context) },
                         onPresetSelected = { viewModel.selectPreset(it) },
                         onIntensityChange = { viewModel.setIntensity(it) },
@@ -200,11 +237,8 @@ fun FilmLabScreen(
                         onGrainReset = { viewModel.resetGrainIntensity() },
                         onCompareStart = { viewModel.setComparing(true) },
                         onCompareEnd = { viewModel.setComparing(false) },
-                        onPickPhoto = {
-                            photoPickerLauncher.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                            )
-                        },
+                        onPickPhoto = onPickPhoto,
+                        onPickRaw = onPickRawDirect,
                         onSelectSample = { sampleId -> viewModel.loadSample(sampleId) }
                     )
                 }
@@ -225,6 +259,23 @@ fun FilmLabScreen(
                 onDismiss = { viewModel.toggleInfoSheet(false) }
             )
         }
+
+        // Camera EXIF & RAW Inspector Dialog
+        if (uiState.showMetadataSheet && uiState.rawMetadata != null) {
+            RawMetadataDialog(
+                metadata = uiState.rawMetadata!!,
+                onDismiss = { viewModel.toggleMetadataSheet(false) }
+            )
+        }
+
+        // Import Source Chooser Dialog (RAW Document vs Gallery)
+        if (showImportDialog) {
+            ImportSourceDialog(
+                onPickGallery = { launchGalleryPicker() },
+                onPickRaw = { launchRawPicker() },
+                onDismiss = { showImportDialog = false }
+            )
+        }
     }
 }
 
@@ -236,6 +287,7 @@ fun FilmLabStandardLayout(
     uiState: FilmLabUiState,
     hasPhoto: Boolean,
     onInfoClick: () -> Unit,
+    onMetadataClick: () -> Unit = {},
     onSaveClick: () -> Unit,
     onPresetSelected: (FilmPreset) -> Unit,
     onIntensityChange: (Float) -> Unit,
@@ -244,6 +296,7 @@ fun FilmLabStandardLayout(
     onCompareStart: () -> Unit,
     onCompareEnd: () -> Unit,
     onPickPhoto: () -> Unit,
+    onPickRaw: () -> Unit = {},
     onSelectSample: (String) -> Unit
 ) {
     Column(
@@ -254,6 +307,8 @@ fun FilmLabStandardLayout(
     ) {
         FilmLabTopBar(
             hasPhoto = hasPhoto,
+            rawMetadata = uiState.rawMetadata,
+            onMetadataClick = onMetadataClick,
             postureBadge = null,
             onInfoClick = onInfoClick,
             onSaveClick = onSaveClick,
@@ -276,9 +331,12 @@ fun FilmLabStandardLayout(
                 activePreset = uiState.selectedPreset,
                 imageWidth = uiState.imageWidth,
                 imageHeight = uiState.imageHeight,
+                rawMetadata = uiState.rawMetadata,
+                onMetadataClick = onMetadataClick,
                 onCompareStart = onCompareStart,
                 onCompareEnd = onCompareEnd,
                 onPickPhoto = onPickPhoto,
+                onPickRaw = onPickRaw,
                 onSelectSample = onSelectSample
             )
         }
@@ -306,6 +364,7 @@ fun FilmLabTabletopLayout(
     hasPhoto: Boolean,
     foldableLayout: FoldableLayoutState,
     onInfoClick: () -> Unit,
+    onMetadataClick: () -> Unit = {},
     onSaveClick: () -> Unit,
     onPresetSelected: (FilmPreset) -> Unit,
     onIntensityChange: (Float) -> Unit,
@@ -314,6 +373,7 @@ fun FilmLabTabletopLayout(
     onCompareStart: () -> Unit,
     onCompareEnd: () -> Unit,
     onPickPhoto: () -> Unit,
+    onPickRaw: () -> Unit = {},
     onSelectSample: (String) -> Unit
 ) {
     Column(
@@ -331,6 +391,8 @@ fun FilmLabTabletopLayout(
         ) {
             FilmLabTopBar(
                 hasPhoto = hasPhoto,
+                rawMetadata = uiState.rawMetadata,
+                onMetadataClick = onMetadataClick,
                 postureBadge = "TABLETOP MONITOR",
                 postureIcon = Icons.Default.Laptop,
                 onInfoClick = onInfoClick,
@@ -353,9 +415,12 @@ fun FilmLabTabletopLayout(
                     activePreset = uiState.selectedPreset,
                     imageWidth = uiState.imageWidth,
                     imageHeight = uiState.imageHeight,
+                    rawMetadata = uiState.rawMetadata,
+                    onMetadataClick = onMetadataClick,
                     onCompareStart = onCompareStart,
                     onCompareEnd = onCompareEnd,
                     onPickPhoto = onPickPhoto,
+                    onPickRaw = onPickRaw,
                     onSelectSample = onSelectSample
                 )
             }
@@ -515,6 +580,7 @@ fun FilmLabDualPaneLayout(
     hasPhoto: Boolean,
     foldableLayout: FoldableLayoutState,
     onInfoClick: () -> Unit,
+    onMetadataClick: () -> Unit = {},
     onSaveClick: () -> Unit,
     onPresetSelected: (FilmPreset) -> Unit,
     onIntensityChange: (Float) -> Unit,
@@ -523,6 +589,7 @@ fun FilmLabDualPaneLayout(
     onCompareStart: () -> Unit,
     onCompareEnd: () -> Unit,
     onPickPhoto: () -> Unit,
+    onPickRaw: () -> Unit = {},
     onSelectSample: (String) -> Unit
 ) {
     Row(
@@ -540,6 +607,8 @@ fun FilmLabDualPaneLayout(
         ) {
             FilmLabTopBar(
                 hasPhoto = hasPhoto,
+                rawMetadata = uiState.rawMetadata,
+                onMetadataClick = onMetadataClick,
                 postureBadge = if (foldableLayout.posture == FoldableDevicePosture.BOOK_MODE) "BOOK POSTURE" else "UNFOLDED 35mm LAB",
                 postureIcon = if (foldableLayout.posture == FoldableDevicePosture.BOOK_MODE) Icons.AutoMirrored.Filled.MenuBook else null,
                 onInfoClick = onInfoClick,
@@ -562,9 +631,12 @@ fun FilmLabDualPaneLayout(
                     activePreset = uiState.selectedPreset,
                     imageWidth = uiState.imageWidth,
                     imageHeight = uiState.imageHeight,
+                    rawMetadata = uiState.rawMetadata,
+                    onMetadataClick = onMetadataClick,
                     onCompareStart = onCompareStart,
                     onCompareEnd = onCompareEnd,
                     onPickPhoto = onPickPhoto,
+                    onPickRaw = onPickRaw,
                     onSelectSample = onSelectSample
                 )
             }
@@ -721,7 +793,7 @@ fun FilmLabDualPaneLayout(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Choose Photo Button
+                // Choose Photo or RAW Button
                 Button(
                     onClick = onPickPhoto,
                     shape = RoundedCornerShape(10.dp),
@@ -736,30 +808,9 @@ fun FilmLabDualPaneLayout(
                 ) {
                     Icon(Icons.Default.FolderOpen, contentDescription = null, tint = uiState.selectedPreset.accentColor, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(text = if (hasPhoto) "Choose Another Photo" else "Choose Photo from Gallery", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text(text = if (hasPhoto) "Import Another Photo / RAW" else "Import Photo or RAW (.ARW, .DNG)", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Fast test scenes
-                Text(
-                    text = "QUICK TEST SCENES",
-                    color = DarkroomTextMuted,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace
-                )
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    SampleSceneChip(title = "Coastal", subtitle = "Golden Dusk", onClick = { onSelectSample("golden_coastal") })
-                    SampleSceneChip(title = "Shadows", subtitle = "Urban B&W", onClick = { onSelectSample("street_portrait") })
-                    SampleSceneChip(title = "Cafe", subtitle = "Neon Lights", onClick = { onSelectSample("vintage_cafe") })
-                }
             }
         }
     }
@@ -916,6 +967,8 @@ fun CombinedAnalogControls(
 @Composable
 fun FilmLabTopBar(
     hasPhoto: Boolean,
+    rawMetadata: RawMetadata? = null,
+    onMetadataClick: (() -> Unit)? = null,
     postureBadge: String? = null,
     postureIcon: androidx.compose.ui.graphics.vector.ImageVector? = null,
     onInfoClick: () -> Unit,
@@ -930,37 +983,41 @@ fun FilmLabTopBar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        // App Title & Analog Scan Badge
+        // Left: App Title & Analog Scan Badge
         Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .clip(RoundedCornerShape(6.dp))
-                .clickable { onInfoClick() }
-                .padding(vertical = 4.dp, horizontal = 2.dp)
-                .testTag("app_title_info_trigger")
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "FILMLAB",
-                color = DarkroomTextPrimary,
-                fontSize = 17.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 2.sp,
-                fontFamily = FontFamily.Monospace
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Surface(
-                color = DarkroomSurfaceElevated,
-                shape = RoundedCornerShape(4.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, DarkroomSurfaceBorder)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { onInfoClick() }
+                    .padding(vertical = 4.dp, horizontal = 2.dp)
+                    .testTag("app_title_info_trigger")
             ) {
                 Text(
-                    text = "35mm · 2048px",
-                    color = KodachromeAmber,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    fontFamily = FontFamily.Monospace,
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    text = "FILMLAB",
+                    color = DarkroomTextPrimary,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 2.sp,
+                    fontFamily = FontFamily.Monospace
                 )
+                Spacer(modifier = Modifier.width(8.dp))
+                Surface(
+                    color = DarkroomSurfaceElevated,
+                    shape = RoundedCornerShape(4.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DarkroomSurfaceBorder)
+                ) {
+                    Text(
+                        text = "35mm",
+                        color = KodachromeAmber,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
             }
 
             // Foldable posture indicator badge
@@ -991,36 +1048,48 @@ fun FilmLabTopBar(
             }
         }
 
-        // Right Action: Save to Gallery Button ONLY (No Share Button)
-        Button(
-            onClick = onSaveClick,
-            enabled = hasPhoto && !isSaving,
-            shape = RoundedCornerShape(8.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = KodachromeAmber,
-                contentColor = DarkroomBlack,
-                disabledContainerColor = DarkroomSurfaceElevated,
-                disabledContentColor = DarkroomTextMuted
-            ),
-            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-            modifier = Modifier
-                .height(34.dp)
-                .testTag("save_button")
+        // Right Action Row: Dedicated Small RAW Info Button + Save to Gallery Button
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            if (isSaving) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(14.dp),
-                    strokeWidth = 2.dp,
-                    color = DarkroomTextPrimary
+            if (rawMetadata != null) {
+                RawInfoButton(
+                    metadata = rawMetadata,
+                    onClick = { onMetadataClick?.invoke() }
                 )
-            } else {
-                Icon(
-                    imageVector = Icons.Default.SaveAlt,
-                    contentDescription = null,
-                    modifier = Modifier.size(15.dp)
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(text = "Save", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+
+            Button(
+                onClick = onSaveClick,
+                enabled = hasPhoto && !isSaving,
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = KodachromeAmber,
+                    contentColor = DarkroomBlack,
+                    disabledContainerColor = DarkroomSurfaceElevated,
+                    disabledContentColor = DarkroomTextMuted
+                ),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                modifier = Modifier
+                    .height(34.dp)
+                    .testTag("save_button")
+            ) {
+                if (isSaving) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 2.dp,
+                        color = DarkroomTextPrimary
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.SaveAlt,
+                        contentDescription = null,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(text = "Save", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
     }
@@ -1041,10 +1110,13 @@ fun FilmViewport(
     activePreset: FilmPreset,
     imageWidth: Int,
     imageHeight: Int,
+    rawMetadata: RawMetadata? = null,
+    onMetadataClick: () -> Unit = {},
     onCompareStart: () -> Unit,
     onCompareEnd: () -> Unit,
     onPickPhoto: () -> Unit,
-    onSelectSample: (String) -> Unit
+    onPickRaw: () -> Unit = {},
+    onSelectSample: ((String) -> Unit)? = null
 ) {
     if (baseBitmap == null) {
         BoxWithConstraints(
@@ -1089,7 +1161,7 @@ fun FilmViewport(
                     Spacer(modifier = Modifier.height(10.dp))
 
                     Text(
-                        text = "NO PHOTO LOADED",
+                        text = "NO PHOTO OR RAW LOADED",
                         color = DarkroomTextPrimary,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
@@ -1100,21 +1172,55 @@ fun FilmViewport(
                     Spacer(modifier = Modifier.height(4.dp))
 
                     Text(
-                        text = "Pick from gallery or load a calibrated test scene:",
+                        text = "Import camera RAW (.ARW, .DNG) or photos from gallery to develop analog film simulations.",
                         color = DarkroomTextSecondary,
-                        fontSize = 11.sp,
-                        textAlign = TextAlign.Center
+                        fontSize = 11.5.sp,
+                        textAlign = TextAlign.Center,
+                        lineHeight = 16.sp,
+                        modifier = Modifier.padding(horizontal = 12.dp)
                     )
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
 
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.horizontalScroll(rememberScrollState())
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.fillMaxWidth(0.92f)
                     ) {
-                        SampleSceneChip(title = "Coastal Dusk", subtitle = "Golden Hour & Sky", onClick = { onSelectSample("golden_coastal") })
-                        SampleSceneChip(title = "Street Shadows", subtitle = "High-Contrast B&W", onClick = { onSelectSample("street_portrait") })
-                        SampleSceneChip(title = "Vintage Cafe", subtitle = "Neon & Halation", onClick = { onSelectSample("vintage_cafe") })
+                        Button(
+                            onClick = onPickRaw,
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFFFF9800).copy(alpha = 0.22f),
+                                contentColor = Color(0xFFFFB74D)
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFF9800).copy(alpha = 0.7f)),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(38.dp)
+                                .testTag("empty_open_raw_button")
+                        ) {
+                            Icon(Icons.Default.Camera, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Open RAW (ARW/DNG)", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        Button(
+                            onClick = onPickPhoto,
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = DarkroomSurfaceElevated,
+                                contentColor = DarkroomTextPrimary
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, DarkroomSurfaceBorder),
+                            modifier = Modifier
+                                .weight(0.95f)
+                                .height(38.dp)
+                                .testTag("empty_open_gallery_button")
+                        ) {
+                            Icon(Icons.Default.FolderOpen, contentDescription = null, tint = KodachromeAmber, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Photo Gallery", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
                     }
                 }
             }
@@ -1463,72 +1569,54 @@ fun FilmViewport(
                     }
                 }
 
-                // Calibrated 35mm grain resolution stamp (Bottom-Start)
+                // Calibrated 35mm grain resolution stamp & discrete RAW trigger (Bottom-Start)
                 Surface(
-                    color = Color.Black.copy(alpha = 0.65f),
+                    color = Color.Black.copy(alpha = 0.70f),
                     shape = RoundedCornerShape(4.dp),
+                    border = androidx.compose.foundation.BorderStroke(
+                        0.5.dp,
+                        if (rawMetadata?.format?.isRaw == true) KodachromeAmber.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.15f)
+                    ),
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .padding(10.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .clickable(enabled = rawMetadata != null) { onMetadataClick() }
+                        .testTag("resolution_stamp")
                 ) {
-                    Text(
-                        text = if (zoomState.isZoomed) {
-                            "${imageWidth}×${imageHeight}px · ${(zoomState.scale * 100).toInt()}% Mag"
-                        } else {
-                            "${imageWidth}×${imageHeight}px · 35mm Scan"
-                        },
-                        color = if (zoomState.isZoomed) KodachromeAmber else DarkroomTextMuted,
-                        fontSize = 10.sp,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
-                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (zoomState.isZoomed) {
+                                "${imageWidth}×${imageHeight}px · ${(zoomState.scale * 100).toInt()}% Mag"
+                            } else if (rawMetadata?.format?.isRaw == true) {
+                                "${imageWidth}×${imageHeight}px · ${rawMetadata.format.badgeLabel}"
+                            } else {
+                                "${imageWidth}×${imageHeight}px · 35mm Scan"
+                            },
+                            color = if (zoomState.isZoomed || rawMetadata?.format?.isRaw == true) KodachromeAmber else DarkroomTextMuted,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        if (rawMetadata != null) {
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = "View RAW Metadata",
+                                tint = KodachromeAmber.copy(alpha = 0.8f),
+                                modifier = Modifier.size(11.dp)
+                            )
+                        }
+                    }
                 }
             }
         }
     }
 }
 
-@Composable
-fun SampleSceneChip(
-    title: String,
-    subtitle: String,
-    onClick: () -> Unit
-) {
-    Surface(
-        color = DarkroomSurfaceElevated,
-        shape = RoundedCornerShape(8.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, DarkroomSurfaceBorder),
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .clickable { onClick() }
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = Icons.Default.AutoAwesome,
-                contentDescription = null,
-                tint = KodachromeAmber,
-                modifier = Modifier.size(12.dp)
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Column {
-                Text(
-                    text = title,
-                    color = DarkroomTextPrimary,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = subtitle,
-                    color = DarkroomTextMuted,
-                    fontSize = 9.sp
-                )
-            }
-        }
-    }
-}
+
 
 @Composable
 fun FilmControlDock(
@@ -1629,7 +1717,7 @@ fun FilmControlDock(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = if (hasPhoto) "Choose Another Photo" else "Choose Photo from Gallery",
+                    text = if (hasPhoto) "Import Another Photo / RAW" else "Import Photo or RAW (.ARW, .DNG)",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold
                 )
@@ -1768,6 +1856,11 @@ fun FilmInfoDialog(
                 InfoSection(
                     title = "Standard 35mm Scan Resolution (2048px)",
                     description = "Analog film grain is tied to the physical 36×24mm emulsion surface (~17.5µm per pixel). FilmLab standardizes photos to 2048px on the long edge so that silver halide crystals and dye cloud density remain optically authentic across any sensor resolution."
+                )
+
+                InfoSection(
+                    title = "Camera RAW Engine (Sony α7 .ARW & Adobe .DNG)",
+                    description = "FilmLab natively decodes 14-bit RAW negative files produced by Sony α7 full-frame mirrorless cameras (A7, A7 II, A7 III, A7 IV, A7R, A7S, A7C series) and Adobe Digital Negative (.DNG) files. Using a multi-tiered decoding architecture, FilmLab extracts full-frame sensor data, optical EXIF telemetry (aperture, focal length, ISO, shutter speed), and translates wide-gamut dynamic range into authentic analog silver and dye physics without digital highlight clipping."
                 )
 
                 InfoSection(
