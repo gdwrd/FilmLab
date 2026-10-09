@@ -1,6 +1,6 @@
 {
   "name": "FilmLab",
-  "description": "Vintage analog film simulation featuring calibrated Kodachrome 64 and Ilford HP5 presets with precision grain structure.",
+  "description": "Ultra-realistic 35mm analog film simulation lab featuring calibrated Kodachrome 64, Portra 400, Fuji Velvia 50, CineStill 800T, Fuji Pro 400H, Ilford HP5, and Kodak Tri-X 400 presets with precision sensitometry, dye coupling, grain physics, vertical photo framing, and fold-aware layouts for foldable phones.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
