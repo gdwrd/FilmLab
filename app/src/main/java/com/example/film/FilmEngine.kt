@@ -194,11 +194,13 @@ object FilmEngine {
     /**
      * Applies the chosen film preset and intensity to a standardized 2048px bitmap.
      * Multithreaded execution across CPU cores for maximum performance.
+     * [grainIntensity] modulates the physical grain physics (0.0 = clean/no grain, 1.0 = calibrated default, >1.0 = pushed grain).
      */
     suspend fun applyFilmFilter(
         baseBitmap: Bitmap,
         preset: FilmPreset,
-        intensity: Float = 1.0f
+        intensity: Float = 1.0f,
+        grainIntensity: Float = 1.0f
     ): Bitmap = withContext(Dispatchers.Default) {
         if (preset == FilmPreset.ORIGINAL || intensity <= 0.001f) {
             return@withContext baseBitmap.copy(Bitmap.Config.ARGB_8888, false)
@@ -214,6 +216,7 @@ object FilmEngine {
         val dstPixels = IntArray(width * height)
 
         val clampedIntensity = intensity.coerceIn(0f, 1f)
+        val clampedGrainIntensity = grainIntensity.coerceIn(0f, 3f)
 
         // For CineStill 800T: Compute the authentic optical highlight halation bloom map
         val halationMap = if (preset == FilmPreset.CINESTILL_800T) {
@@ -233,26 +236,26 @@ object FilmEngine {
                 if (startY < endY) {
                     when (preset) {
                         FilmPreset.KODACHROME_64 -> processKodachromeChunk(
-                            srcPixels, dstPixels, width, startY, endY, clampedIntensity
+                            srcPixels, dstPixels, width, startY, endY, clampedIntensity, clampedGrainIntensity
                         )
                         FilmPreset.PORTRA_400 -> processPortraChunk(
-                            srcPixels, dstPixels, width, startY, endY, clampedIntensity
+                            srcPixels, dstPixels, width, startY, endY, clampedIntensity, clampedGrainIntensity
                         )
                         FilmPreset.FUJI_VELVIA_50 -> processVelviaChunk(
-                            srcPixels, dstPixels, width, startY, endY, clampedIntensity
+                            srcPixels, dstPixels, width, startY, endY, clampedIntensity, clampedGrainIntensity
                         )
                         FilmPreset.CINESTILL_800T -> processCineStillChunk(
                             srcPixels, dstPixels, width, startY, endY, clampedIntensity,
-                            halationMap ?: FloatArray(0), (width + 3) / 4
+                            halationMap ?: FloatArray(0), (width + 3) / 4, clampedGrainIntensity
                         )
                         FilmPreset.FUJI_PRO_400H -> processPro400hChunk(
-                            srcPixels, dstPixels, width, startY, endY, clampedIntensity
+                            srcPixels, dstPixels, width, startY, endY, clampedIntensity, clampedGrainIntensity
                         )
                         FilmPreset.ILFORD_HP5 -> processIlfordHp5Chunk(
-                            srcPixels, dstPixels, width, startY, endY, clampedIntensity
+                            srcPixels, dstPixels, width, startY, endY, clampedIntensity, clampedGrainIntensity
                         )
                         FilmPreset.KODAK_TRI_X -> processTriXChunk(
-                            srcPixels, dstPixels, width, startY, endY, clampedIntensity
+                            srcPixels, dstPixels, width, startY, endY, clampedIntensity, clampedGrainIntensity
                         )
                         FilmPreset.ORIGINAL -> {
                             System.arraycopy(
@@ -344,7 +347,8 @@ object FilmEngine {
     // 1. KODACHROME 64 (Reversal Slide Film, K-14 Process)
     // =========================================================================
     private fun processKodachromeChunk(
-        src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int, intensity: Float
+        src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int,
+        intensity: Float, grainIntensity: Float
     ) {
         for (y in startY until endY) {
             var rngState = (y * 31337 + 1013904223)
@@ -394,7 +398,7 @@ object FilmEngine {
                 rngState = rngState xor (rngState shl 5)
 
                 val noiseVal = ((rngState and 0x7FFF) % 25) - 12
-                val dyeGrain = noiseVal * midtoneWeight * 0.48f
+                val dyeGrain = noiseVal * midtoneWeight * 0.48f * grainIntensity
 
                 filmR = (filmR + dyeGrain).coerceIn(0f, 255f)
                 filmG = (filmG + dyeGrain).coerceIn(0f, 255f)
@@ -413,7 +417,8 @@ object FilmEngine {
     // 2. KODAK PORTRA 400 (C-41 Professional Color Negative)
     // =========================================================================
     private fun processPortraChunk(
-        src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int, intensity: Float
+        src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int,
+        intensity: Float, grainIntensity: Float
     ) {
         for (y in startY until endY) {
             var rngState = (y * 39829 + 1729481)
@@ -458,7 +463,7 @@ object FilmEngine {
                 rngState = rngState xor (rngState shl 5)
 
                 val noiseVal = ((rngState and 0x7FFF) % 19) - 9
-                val tGrain = noiseVal * midtoneWeight * 0.42f
+                val tGrain = noiseVal * midtoneWeight * 0.42f * grainIntensity
 
                 filmR = (filmR + tGrain).coerceIn(0f, 255f)
                 filmG = (filmG + tGrain).coerceIn(0f, 255f)
@@ -477,7 +482,8 @@ object FilmEngine {
     // 3. FUJIFILM VELVIA 50 (E-6 Ultra-Vivid Chrome Slide)
     // =========================================================================
     private fun processVelviaChunk(
-        src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int, intensity: Float
+        src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int,
+        intensity: Float, grainIntensity: Float
     ) {
         for (y in startY until endY) {
             var rngState = (y * 53171 + 2491823)
@@ -526,7 +532,7 @@ object FilmEngine {
                 rngState = rngState xor (rngState shl 5)
 
                 val noiseVal = ((rngState and 0x7FFF) % 11) - 5
-                val microGrain = noiseVal * midtoneWeight * 0.28f
+                val microGrain = noiseVal * midtoneWeight * 0.28f * grainIntensity
 
                 filmR = (filmR + microGrain).coerceIn(0f, 255f)
                 filmG = (filmG + microGrain).coerceIn(0f, 255f)
@@ -546,7 +552,7 @@ object FilmEngine {
     // =========================================================================
     private fun processCineStillChunk(
         src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int, intensity: Float,
-        halationMap: FloatArray, dsWidth: Int
+        halationMap: FloatArray, dsWidth: Int, grainIntensity: Float
     ) {
         val hasHalation = halationMap.isNotEmpty()
 
@@ -599,7 +605,7 @@ object FilmEngine {
                 rngState = rngState xor (rngState shl 5)
 
                 val noiseVal = ((rngState and 0x7FFF) % 35) - 17
-                val cineGrain = noiseVal * grainWeight * 0.72f
+                val cineGrain = noiseVal * grainWeight * 0.72f * grainIntensity
 
                 filmR = (filmR + cineGrain).coerceIn(0f, 255f)
                 filmG = (filmG + cineGrain).coerceIn(0f, 255f)
@@ -618,7 +624,8 @@ object FilmEngine {
     // 5. FUJIFILM PRO 400H (C-41 4th-Layer Cyan Negative)
     // =========================================================================
     private fun processPro400hChunk(
-        src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int, intensity: Float
+        src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int,
+        intensity: Float, grainIntensity: Float
     ) {
         for (y in startY until endY) {
             var rngState = (y * 41143 + 1883921)
@@ -664,7 +671,7 @@ object FilmEngine {
                 rngState = rngState xor (rngState shl 5)
 
                 val noiseVal = ((rngState and 0x7FFF) % 23) - 11
-                val proGrain = noiseVal * midtoneWeight * 0.44f
+                val proGrain = noiseVal * midtoneWeight * 0.44f * grainIntensity
 
                 filmR = (filmR + proGrain).coerceIn(0f, 255f)
                 filmG = (filmG + proGrain).coerceIn(0f, 255f)
@@ -683,7 +690,8 @@ object FilmEngine {
     // 6. ILFORD HP5 PLUS (400 ISO Panchromatic B&W)
     // =========================================================================
     private fun processIlfordHp5Chunk(
-        src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int, intensity: Float
+        src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int,
+        intensity: Float, grainIntensity: Float
     ) {
         for (y in startY until endY) {
             var rngState = (y * 45293 + 1664525)
@@ -714,7 +722,7 @@ object FilmEngine {
                 rngState = rngState xor (rngState shl 5)
 
                 val noiseVal = ((rngState and 0x7FFF) % 43) - 21
-                val grainDelta = (noiseVal * grainWeight * 1.35f).toInt()
+                val grainDelta = (noiseVal * grainWeight * 1.35f * grainIntensity).toInt()
                 val finalMono = (filmVal + grainDelta).coerceIn(0, 255)
 
                 val outR = (r + (finalMono - r) * intensity).toInt().coerceIn(0, 255)
@@ -730,7 +738,8 @@ object FilmEngine {
     // 7. KODAK TRI-X 400 (D-76 Developer Photojournalism B&W)
     // =========================================================================
     private fun processTriXChunk(
-        src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int, intensity: Float
+        src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int,
+        intensity: Float, grainIntensity: Float
     ) {
         for (y in startY until endY) {
             var rngState = (y * 58211 + 2938171)
@@ -770,7 +779,7 @@ object FilmEngine {
                 val clumpNoise = ((clumpHash and 0x7FFF) % 25) - 12
 
                 val totalNoise = (crystalNoise * 0.65f + clumpNoise * 0.35f)
-                val grainDelta = (totalNoise * grainWeight * 1.55f).toInt()
+                val grainDelta = (totalNoise * grainWeight * 1.55f * grainIntensity).toInt()
                 val finalMono = (filmVal + grainDelta).coerceIn(0, 255)
 
                 val outR = (r + (finalMono - r) * intensity).toInt().coerceIn(0, 255)
