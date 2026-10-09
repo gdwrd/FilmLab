@@ -229,4 +229,63 @@ class ExampleRobolectricTest {
     assertEquals(0f, state.offsetY, 0.001f)
     assertFalse(state.isZoomed)
   }
+
+  @Test
+  fun testGrainIntensityPhysicsModulation() = runBlocking {
+    // 30x30 uniform midtone image
+    val testBitmap = Bitmap.createBitmap(30, 30, Bitmap.Config.ARGB_8888).apply {
+      eraseColor(Color.rgb(128, 128, 128))
+    }
+
+    // Process with grainIntensity = 0.0f (Clean / zero grain noise)
+    val cleanOutput = FilmEngine.applyFilmFilter(testBitmap, FilmPreset.ILFORD_HP5, intensity = 1.0f, grainIntensity = 0.0f)
+    val pixel1 = cleanOutput.getPixel(10, 10)
+    val pixel2 = cleanOutput.getPixel(11, 10)
+    val pixel3 = cleanOutput.getPixel(12, 10)
+    // With zero grain physics, all pixels in a uniform flat field have identical tone values
+    assertEquals("Pixels should be identical with 0.0 grain intensity", pixel1, pixel2)
+    assertEquals("Pixels should be identical with 0.0 grain intensity", pixel2, pixel3)
+
+    // Process with grainIntensity = 1.0f (Calibrated default grain)
+    val stockOutput = FilmEngine.applyFilmFilter(testBitmap, FilmPreset.ILFORD_HP5, intensity = 1.0f, grainIntensity = 1.0f)
+    var stockVariance = 0
+    for (x in 5..25) {
+      val diff = abs(Color.red(stockOutput.getPixel(x, 15)) - Color.red(stockOutput.getPixel(x + 1, 15)))
+      stockVariance += diff
+    }
+    assertTrue("Stock grain should produce texture variance between pixels", stockVariance > 0)
+
+    // Process with grainIntensity = 2.0f (Pushed grit grain)
+    val pushedOutput = FilmEngine.applyFilmFilter(testBitmap, FilmPreset.ILFORD_HP5, intensity = 1.0f, grainIntensity = 2.0f)
+    var pushedVariance = 0
+    for (x in 5..25) {
+      val diff = abs(Color.red(pushedOutput.getPixel(x, 15)) - Color.red(pushedOutput.getPixel(x + 1, 15)))
+      pushedVariance += diff
+    }
+    assertTrue("Pushed grain (2.0x) should produce greater texture variance than stock (1.0x)", pushedVariance > stockVariance)
+  }
+
+  @Test
+  fun testViewModelGrainIntensityControls() {
+    val application = ApplicationProvider.getApplicationContext<android.app.Application>()
+    val viewModel = com.example.ui.FilmLabViewModel(application)
+
+    // Default grain intensity is 1.0f (100% Calibrated Stock)
+    assertEquals(1.0f, viewModel.uiState.value.grainIntensity, 0.001f)
+
+    // Set custom grain intensity
+    viewModel.setGrainIntensity(1.65f)
+    assertEquals(1.65f, viewModel.uiState.value.grainIntensity, 0.001f)
+
+    // Clamping: below 0 should clamp to 0, above 2 should clamp to 2
+    viewModel.setGrainIntensity(-0.5f)
+    assertEquals(0.0f, viewModel.uiState.value.grainIntensity, 0.001f)
+
+    viewModel.setGrainIntensity(3.5f)
+    assertEquals(2.0f, viewModel.uiState.value.grainIntensity, 0.001f)
+
+    // Reset grain intensity returns to calibrated 1.0f
+    viewModel.resetGrainIntensity()
+    assertEquals(1.0f, viewModel.uiState.value.grainIntensity, 0.001f)
+  }
 }

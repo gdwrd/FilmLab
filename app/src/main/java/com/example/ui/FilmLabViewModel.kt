@@ -38,6 +38,7 @@ data class FilmLabUiState(
     val filmFullBitmap: Bitmap? = null,
     val selectedPreset: FilmPreset = FilmPreset.KODACHROME_64,
     val intensity: Float = 1.0f,
+    val grainIntensity: Float = 1.0f,
     val isComparing: Boolean = false,
     val isProcessing: Boolean = false,
     val activeSampleId: String? = null,
@@ -53,6 +54,7 @@ class FilmLabViewModel(application: Application) : AndroidViewModel(application)
     val uiState: StateFlow<FilmLabUiState> = _uiState.asStateFlow()
 
     private var filterJob: Job? = null
+    private var grainDebounceJob: Job? = null
 
     init {
         // App launches cleanly ready for the user's gallery photo
@@ -75,7 +77,7 @@ class FilmLabViewModel(application: Application) : AndroidViewModel(application)
                     activeSampleId = sampleId
                 )
             }
-            recomputeFilmEffect(normalized, _uiState.value.selectedPreset)
+            recomputeFilmEffect(normalized, _uiState.value.selectedPreset, _uiState.value.grainIntensity)
         }
     }
 
@@ -102,7 +104,7 @@ class FilmLabViewModel(application: Application) : AndroidViewModel(application)
                             activeSampleId = null
                         )
                     }
-                    recomputeFilmEffect(normalized, _uiState.value.selectedPreset)
+                    recomputeFilmEffect(normalized, _uiState.value.selectedPreset, _uiState.value.grainIntensity)
                 } else {
                     _uiState.update {
                         it.copy(
@@ -128,11 +130,30 @@ class FilmLabViewModel(application: Application) : AndroidViewModel(application)
         }
         _uiState.update { it.copy(selectedPreset = preset) }
         val base = _uiState.value.baseBitmap ?: return
-        recomputeFilmEffect(base, preset)
+        recomputeFilmEffect(base, preset, _uiState.value.grainIntensity)
     }
 
     fun setIntensity(intensity: Float) {
         _uiState.update { it.copy(intensity = intensity.coerceIn(0f, 1f)) }
+    }
+
+    fun setGrainIntensity(grainIntensity: Float) {
+        val clamped = grainIntensity.coerceIn(0f, 2.0f)
+        _uiState.update { it.copy(grainIntensity = clamped) }
+        val base = _uiState.value.baseBitmap ?: return
+        grainDebounceJob?.cancel()
+        grainDebounceJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(40)
+            recomputeFilmEffect(base, _uiState.value.selectedPreset, clamped)
+        }
+    }
+
+    fun resetGrainIntensity() {
+        grainDebounceJob?.cancel()
+        val clamped = 1.0f
+        _uiState.update { it.copy(grainIntensity = clamped) }
+        val base = _uiState.value.baseBitmap ?: return
+        recomputeFilmEffect(base, _uiState.value.selectedPreset, clamped)
     }
 
     fun setComparing(comparing: Boolean) {
@@ -147,7 +168,11 @@ class FilmLabViewModel(application: Application) : AndroidViewModel(application)
         _uiState.update { it.copy(saveStatus = SaveStatus.Idle) }
     }
 
-    private fun recomputeFilmEffect(base: Bitmap, preset: FilmPreset) {
+    private fun recomputeFilmEffect(
+        base: Bitmap,
+        preset: FilmPreset,
+        grainIntensity: Float = _uiState.value.grainIntensity
+    ) {
         filterJob?.cancel()
         filterJob = viewModelScope.launch {
             if (preset == FilmPreset.ORIGINAL) {
@@ -161,7 +186,7 @@ class FilmLabViewModel(application: Application) : AndroidViewModel(application)
             }
 
             _uiState.update { it.copy(isProcessing = true) }
-            val processed = FilmEngine.applyFilmFilter(base, preset, 1.0f)
+            val processed = FilmEngine.applyFilmFilter(base, preset, 1.0f, grainIntensity)
             _uiState.update {
                 it.copy(
                     filmFullBitmap = processed,
@@ -172,7 +197,7 @@ class FilmLabViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * Renders the final blended 2048px master bitmap based on current preset and intensity.
+     * Renders the final blended 2048px master bitmap based on current preset, intensity, and grain physics.
      */
     suspend fun renderCurrentMasterBitmap(): Bitmap? = withContext(Dispatchers.Default) {
         val state = _uiState.value
@@ -180,7 +205,12 @@ class FilmLabViewModel(application: Application) : AndroidViewModel(application)
         if (state.selectedPreset == FilmPreset.ORIGINAL || state.intensity <= 0.001f) {
             return@withContext base
         }
-        return@withContext FilmEngine.applyFilmFilter(base, state.selectedPreset, state.intensity)
+        return@withContext FilmEngine.applyFilmFilter(
+            base,
+            state.selectedPreset,
+            state.intensity,
+            state.grainIntensity
+        )
     }
 
     fun saveToGallery(context: Context) {

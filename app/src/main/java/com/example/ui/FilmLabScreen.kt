@@ -151,6 +151,8 @@ fun FilmLabScreen(
                         onSaveClick = { viewModel.saveToGallery(context) },
                         onPresetSelected = { viewModel.selectPreset(it) },
                         onIntensityChange = { viewModel.setIntensity(it) },
+                        onGrainIntensityChange = { viewModel.setGrainIntensity(it) },
+                        onGrainReset = { viewModel.resetGrainIntensity() },
                         onCompareStart = { viewModel.setComparing(true) },
                         onCompareEnd = { viewModel.setComparing(false) },
                         onPickPhoto = {
@@ -172,6 +174,8 @@ fun FilmLabScreen(
                         onSaveClick = { viewModel.saveToGallery(context) },
                         onPresetSelected = { viewModel.selectPreset(it) },
                         onIntensityChange = { viewModel.setIntensity(it) },
+                        onGrainIntensityChange = { viewModel.setGrainIntensity(it) },
+                        onGrainReset = { viewModel.resetGrainIntensity() },
                         onCompareStart = { viewModel.setComparing(true) },
                         onCompareEnd = { viewModel.setComparing(false) },
                         onPickPhoto = {
@@ -192,6 +196,8 @@ fun FilmLabScreen(
                         onSaveClick = { viewModel.saveToGallery(context) },
                         onPresetSelected = { viewModel.selectPreset(it) },
                         onIntensityChange = { viewModel.setIntensity(it) },
+                        onGrainIntensityChange = { viewModel.setGrainIntensity(it) },
+                        onGrainReset = { viewModel.resetGrainIntensity() },
                         onCompareStart = { viewModel.setComparing(true) },
                         onCompareEnd = { viewModel.setComparing(false) },
                         onPickPhoto = {
@@ -233,6 +239,8 @@ fun FilmLabStandardLayout(
     onSaveClick: () -> Unit,
     onPresetSelected: (FilmPreset) -> Unit,
     onIntensityChange: (Float) -> Unit,
+    onGrainIntensityChange: (Float) -> Unit,
+    onGrainReset: () -> Unit,
     onCompareStart: () -> Unit,
     onCompareEnd: () -> Unit,
     onPickPhoto: () -> Unit,
@@ -279,8 +287,11 @@ fun FilmLabStandardLayout(
             hasPhoto = hasPhoto,
             selectedPreset = uiState.selectedPreset,
             intensity = uiState.intensity,
+            grainIntensity = uiState.grainIntensity,
             onPresetSelected = onPresetSelected,
             onIntensityChange = onIntensityChange,
+            onGrainIntensityChange = onGrainIntensityChange,
+            onGrainReset = onGrainReset,
             onPickPhoto = onPickPhoto
         )
     }
@@ -298,6 +309,8 @@ fun FilmLabTabletopLayout(
     onSaveClick: () -> Unit,
     onPresetSelected: (FilmPreset) -> Unit,
     onIntensityChange: (Float) -> Unit,
+    onGrainIntensityChange: (Float) -> Unit,
+    onGrainReset: () -> Unit,
     onCompareStart: () -> Unit,
     onCompareEnd: () -> Unit,
     onPickPhoto: () -> Unit,
@@ -416,22 +429,17 @@ fun FilmLabTabletopLayout(
 
                 Spacer(modifier = Modifier.height(4.dp))
 
-                Slider(
-                    value = uiState.intensity,
-                    onValueChange = onIntensityChange,
-                    valueRange = 0f..1f,
-                    enabled = hasPhoto,
-                    colors = SliderDefaults.colors(
-                        thumbColor = uiState.selectedPreset.accentColor,
-                        activeTrackColor = uiState.selectedPreset.accentColor,
-                        inactiveTrackColor = DarkroomSurfaceBorder
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("intensity_slider")
+                CombinedAnalogControls(
+                    intensity = uiState.intensity,
+                    grainIntensity = uiState.grainIntensity,
+                    selectedPreset = uiState.selectedPreset,
+                    hasPhoto = hasPhoto,
+                    onIntensityChange = onIntensityChange,
+                    onGrainIntensityChange = onGrainIntensityChange,
+                    onGrainReset = onGrainReset
                 )
 
-                Spacer(modifier = Modifier.height(6.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
                 // Presets Carousel
                 LazyRow(
@@ -510,6 +518,8 @@ fun FilmLabDualPaneLayout(
     onSaveClick: () -> Unit,
     onPresetSelected: (FilmPreset) -> Unit,
     onIntensityChange: (Float) -> Unit,
+    onGrainIntensityChange: (Float) -> Unit,
+    onGrainReset: () -> Unit,
     onCompareStart: () -> Unit,
     onCompareEnd: () -> Unit,
     onPickPhoto: () -> Unit,
@@ -625,44 +635,18 @@ fun FilmLabDualPaneLayout(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Emulsion Intensity Slider
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "EMULSION INTENSITY",
-                        color = DarkroomTextSecondary,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace
-                    )
-                    Text(
-                        text = "${(uiState.intensity * 100).toInt()}%",
-                        color = uiState.selectedPreset.accentColor,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
-
-                Slider(
-                    value = uiState.intensity,
-                    onValueChange = onIntensityChange,
-                    valueRange = 0f..1f,
-                    enabled = hasPhoto,
-                    colors = SliderDefaults.colors(
-                        thumbColor = uiState.selectedPreset.accentColor,
-                        activeTrackColor = uiState.selectedPreset.accentColor,
-                        inactiveTrackColor = DarkroomSurfaceBorder
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("intensity_slider")
+                // Unified Analog Emulsion & Grain Controls
+                CombinedAnalogControls(
+                    intensity = uiState.intensity,
+                    grainIntensity = uiState.grainIntensity,
+                    selectedPreset = uiState.selectedPreset,
+                    hasPhoto = hasPhoto,
+                    onIntensityChange = onIntensityChange,
+                    onGrainIntensityChange = onGrainIntensityChange,
+                    onGrainReset = onGrainReset
                 )
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
                 // Film Stock Presets Selector
                 Text(
@@ -782,8 +766,153 @@ fun FilmLabDualPaneLayout(
 }
 
 /**
- * Top bar with app branding, calibration info trigger, and Save button only (NO share button).
+ * Combined Analog Controls:
+ * Unifies Emulsion Intensity and Grain Physics Texture into a single ultra-compact,
+ * tactile console module so the user's photo remains the prominent focal point.
  */
+@Composable
+fun CombinedAnalogControls(
+    intensity: Float,
+    grainIntensity: Float,
+    selectedPreset: FilmPreset,
+    hasPhoto: Boolean,
+    onIntensityChange: (Float) -> Unit,
+    onGrainIntensityChange: (Float) -> Unit,
+    onGrainReset: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val isOriginal = selectedPreset == FilmPreset.ORIGINAL
+    val isDefaultCalibrated = grainIntensity in 0.98f..1.02f
+
+    Surface(
+        color = DarkroomSurfaceElevated.copy(alpha = 0.65f),
+        shape = RoundedCornerShape(8.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, DarkroomSurfaceBorder),
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("grain_control_section")
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 6.dp)
+        ) {
+            // Emulsion Channel Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "EMULSION",
+                    color = DarkroomTextSecondary,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.width(64.dp)
+                )
+
+                Slider(
+                    value = intensity,
+                    onValueChange = onIntensityChange,
+                    valueRange = 0f..1f,
+                    enabled = hasPhoto,
+                    colors = SliderDefaults.colors(
+                        thumbColor = selectedPreset.accentColor,
+                        activeTrackColor = selectedPreset.accentColor,
+                        inactiveTrackColor = DarkroomSurfaceBorder,
+                        disabledThumbColor = DarkroomSurfaceBorder,
+                        disabledActiveTrackColor = DarkroomSurfaceBorder
+                    ),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(28.dp)
+                        .testTag("intensity_slider")
+                )
+
+                Text(
+                    text = "${(intensity * 100).toInt()}%",
+                    color = if (intensity > 0f) selectedPreset.accentColor else DarkroomTextSecondary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.width(38.dp)
+                )
+            }
+
+            // Grain Channel Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.width(64.dp)
+                ) {
+                    Text(
+                        text = "GRAIN",
+                        color = if (!isOriginal) DarkroomTextSecondary else DarkroomTextMuted,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    if (!isOriginal && !isDefaultCalibrated) {
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text(
+                            text = "RST",
+                            color = selectedPreset.accentColor,
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(selectedPreset.accentColor.copy(alpha = 0.2f))
+                                .clickable { onGrainReset() }
+                                .padding(horizontal = 2.dp, vertical = 1.dp)
+                                .testTag("grain_reset_button")
+                        )
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("grain_slider")
+                ) {
+                    Slider(
+                        value = if (isOriginal) 0f else grainIntensity,
+                        onValueChange = onGrainIntensityChange,
+                        valueRange = 0f..2f,
+                        enabled = hasPhoto && !isOriginal,
+                        colors = SliderDefaults.colors(
+                            thumbColor = selectedPreset.accentColor,
+                            activeTrackColor = selectedPreset.accentColor,
+                            inactiveTrackColor = DarkroomSurfaceBorder,
+                            disabledThumbColor = DarkroomSurfaceBorder,
+                            disabledActiveTrackColor = DarkroomSurfaceBorder
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(28.dp)
+                            .testTag("grain_intensity_slider")
+                    )
+                }
+
+                Text(
+                    text = if (isOriginal) "RAW" else "${(grainIntensity * 100).toInt()}%",
+                    color = if (!isOriginal && grainIntensity > 0f) selectedPreset.accentColor else DarkroomTextSecondary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier
+                        .width(38.dp)
+                        .testTag("grain_value_label")
+                )
+            }
+        }
+    }
+}
 @Composable
 fun FilmLabTopBar(
     hasPhoto: Boolean,
@@ -1406,78 +1535,36 @@ fun FilmControlDock(
     hasPhoto: Boolean,
     selectedPreset: FilmPreset,
     intensity: Float,
+    grainIntensity: Float,
     onPresetSelected: (FilmPreset) -> Unit,
     onIntensityChange: (Float) -> Unit,
+    onGrainIntensityChange: (Float) -> Unit,
+    onGrainReset: () -> Unit,
     onPickPhoto: () -> Unit
 ) {
     Surface(
         color = DarkroomSurface,
-        shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, DarkroomSurfaceBorder),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .padding(horizontal = 14.dp, vertical = 8.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        text = "EMULSION INTENSITY",
-                        color = DarkroomTextSecondary,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        letterSpacing = 1.sp
-                    )
-                    Text(
-                        text = "${selectedPreset.category} · ${selectedPreset.isoRating}",
-                        color = selectedPreset.accentColor,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Medium,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
-
-                Surface(
-                    color = DarkroomSurfaceElevated,
-                    shape = RoundedCornerShape(4.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, DarkroomSurfaceBorder)
-                ) {
-                    Text(
-                        text = "${(intensity * 100).toInt()}%",
-                        color = if (intensity > 0f) selectedPreset.accentColor else DarkroomTextSecondary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                    )
-                }
-            }
-
-            Slider(
-                value = intensity,
-                onValueChange = onIntensityChange,
-                valueRange = 0f..1f,
-                enabled = hasPhoto,
-                colors = SliderDefaults.colors(
-                    thumbColor = selectedPreset.accentColor,
-                    activeTrackColor = selectedPreset.accentColor,
-                    inactiveTrackColor = DarkroomSurfaceBorder,
-                    disabledThumbColor = DarkroomSurfaceBorder,
-                    disabledActiveTrackColor = DarkroomSurfaceBorder
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("intensity_slider")
+            // Unified Analog Emulsion & Grain Controls
+            CombinedAnalogControls(
+                intensity = intensity,
+                grainIntensity = grainIntensity,
+                selectedPreset = selectedPreset,
+                hasPhoto = hasPhoto,
+                onIntensityChange = onIntensityChange,
+                onGrainIntensityChange = onGrainIntensityChange,
+                onGrainReset = onGrainReset
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1485,28 +1572,28 @@ fun FilmControlDock(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "FILM STOCK SIMULATION (8 STOCKS)",
+                    text = "FILM STOCKS (8)",
                     color = DarkroomTextSecondary,
-                    fontSize = 11.sp,
+                    fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = FontFamily.Monospace,
                     letterSpacing = 1.sp
                 )
 
                 Text(
-                    text = selectedPreset.displayName,
+                    text = "${selectedPreset.displayName} · ${selectedPreset.isoRating}",
                     color = selectedPreset.accentColor,
-                    fontSize = 11.sp,
+                    fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = FontFamily.Monospace
                 )
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
             LazyRow(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(horizontal = 2.dp)
             ) {
                 items(FilmPreset.values()) { preset ->
@@ -1518,33 +1605,33 @@ fun FilmControlDock(
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             Button(
                 onClick = onPickPhoto,
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(8.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = DarkroomSurfaceElevated,
                     contentColor = DarkroomTextPrimary
                 ),
                 border = androidx.compose.foundation.BorderStroke(1.dp, DarkroomSurfaceBorder),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                 modifier = Modifier
                     .fillMaxWidth()
+                    .height(36.dp)
                     .testTag("upload_photo_button")
             ) {
                 Icon(
                     imageVector = Icons.Default.FolderOpen,
                     contentDescription = "Upload Photo from Gallery",
                     tint = selectedPreset.accentColor,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(15.dp)
                 )
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = if (hasPhoto) "Choose Another Photo" else "Choose Photo from Gallery",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 0.5.sp
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
                 )
             }
         }
@@ -1562,22 +1649,22 @@ fun FilmPresetCard(
 
     Card(
         modifier = Modifier
-            .width(138.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .width(122.dp)
+            .clip(RoundedCornerShape(8.dp))
             .clickable { onClick() }
             .border(
-                width = if (isSelected) 1.8.dp else 1.dp,
+                width = if (isSelected) 1.5.dp else 1.dp,
                 color = borderColor,
-                shape = RoundedCornerShape(10.dp)
+                shape = RoundedCornerShape(8.dp)
             )
             .testTag("preset_${preset.shortCode.lowercase()}"),
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(containerColor = containerBg)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 10.dp, vertical = 10.dp)
+                .padding(horizontal = 8.dp, vertical = 7.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1587,7 +1674,7 @@ fun FilmPresetCard(
                 Text(
                     text = preset.shortCode,
                     color = if (isSelected) preset.accentColor else DarkroomTextPrimary,
-                    fontSize = 13.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = FontFamily.Monospace
                 )
@@ -1596,40 +1683,40 @@ fun FilmPresetCard(
                         imageVector = Icons.Default.CheckCircle,
                         contentDescription = null,
                         tint = preset.accentColor,
-                        modifier = Modifier.size(13.dp)
+                        modifier = Modifier.size(12.dp)
                     )
                 } else {
                     Box(
                         modifier = Modifier
-                            .size(6.dp)
+                            .size(5.dp)
                             .clip(CircleShape)
                             .background(preset.accentColor.copy(alpha = 0.6f))
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(2.dp))
 
             Text(
                 text = preset.displayName,
                 color = if (isSelected) DarkroomTextPrimary else DarkroomTextSecondary,
-                fontSize = 11.sp,
+                fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
 
-            Spacer(modifier = Modifier.height(2.dp))
+            Spacer(modifier = Modifier.height(1.dp))
 
             Text(
                 text = preset.subtitle,
                 color = if (isSelected) preset.accentColor.copy(alpha = 0.9f) else DarkroomTextMuted,
-                fontSize = 9.sp,
+                fontSize = 8.5.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
 
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(3.dp))
 
             Surface(
                 color = DarkroomBlack.copy(alpha = 0.45f),
@@ -1638,7 +1725,7 @@ fun FilmPresetCard(
                 Text(
                     text = "${preset.category.take(8)} · ${preset.isoRating}",
                     color = DarkroomTextMuted,
-                    fontSize = 8.sp,
+                    fontSize = 7.5.sp,
                     fontFamily = FontFamily.Monospace,
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                 )
@@ -1721,6 +1808,11 @@ fun FilmInfoDialog(
                 InfoSection(
                     title = "7. Kodak Tri-X 400 (D-76 Grit)",
                     description = "Quintessential photojournalism B&W (Henri Cartier-Bresson, Garry Winogrand). Harder contrast than HP5 with ortho-panchromatic blue attenuation, charcoal shadows, and multi-scale metallic silver filament clumps."
+                )
+
+                InfoSection(
+                    title = "Grain Texture Physics & Halide Control",
+                    description = "Each film stock emulates distinct physical chemistry: Kodak Portra tabular T-GRAIN crystals, Kodachrome subtractive K-14 dye clouds, Fujifilm Velvia ultra-fine RMS-9 slide granules, CineStill Vision3 motion picture halation grain, and Kodak Tri-X metallic silver filament clumps. Use the Grain Physics slider to dial from 0% (clean modern sensor baseline) to 100% (scientifically calibrated stock) up to 200% (pushed ISO darkroom grit)."
                 )
 
                 InfoSection(
