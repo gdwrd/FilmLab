@@ -6,8 +6,11 @@ import android.graphics.Color
 import androidx.test.core.app.ApplicationProvider
 import com.example.film.FilmEngine
 import com.example.film.FilmPreset
+import com.example.ui.ZoomPanState
+import androidx.compose.ui.geometry.Offset
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -154,5 +157,76 @@ class ExampleRobolectricTest {
     // Kodak Tri-X 400 deep charcoal shadow and biting contrast
     assertTrue("Shadows should be deep charcoal (got $shadowLum)", shadowLum < 45)
     assertTrue("High contrast separation (contrast delta = ${highLum - shadowLum})", highLum - shadowLum > 90)
+  }
+
+  @Test
+  fun testZoomPanInitialState() {
+    val state = ZoomPanState()
+    assertEquals(1.0f, state.scale, 0.001f)
+    assertEquals(0f, state.offsetX, 0.001f)
+    assertEquals(0f, state.offsetY, 0.001f)
+    assertFalse(state.isZoomed)
+    assertEquals("1.0×", state.zoomLabel)
+  }
+
+  @Test
+  fun testZoomPanPinchTransformAndClamping() {
+    val state = ZoomPanState(minScale = 1.0f, maxScale = 8.0f)
+    state.updateContainerSize(1000f, 800f)
+
+    // Pinch zoom 2x at center (500, 400)
+    state.onTransform(
+      centroid = Offset(500f, 400f),
+      pan = Offset.Zero,
+      zoomChange = 2.0f
+    )
+
+    assertEquals(2.0f, state.scale, 0.01f)
+    assertTrue(state.isZoomed)
+    assertEquals("2.0×", state.zoomLabel)
+    // Zoomed at exact center: offsets should stay 0
+    assertEquals(0f, state.offsetX, 0.1f)
+    assertEquals(0f, state.offsetY, 0.1f)
+
+    // Pan within bounds: max pan X at 2x is (1000 * 1)/2 = 500f, max pan Y is (800 * 1)/2 = 400f
+    state.onPan(Offset(200f, -150f))
+    assertEquals(200f, state.offsetX, 0.1f)
+    assertEquals(-150f, state.offsetY, 0.1f)
+
+    // Excessive pan beyond bounds should be clamped
+    state.onPan(Offset(1000f, -1000f))
+    assertEquals(500f, state.offsetX, 0.1f) // clamped to maxOffsetX (500)
+    assertEquals(-400f, state.offsetY, 0.1f) // clamped to -maxOffsetY (-400)
+  }
+
+  @Test
+  fun testZoomMaxScaleClamping() {
+    val state = ZoomPanState(minScale = 1.0f, maxScale = 8.0f)
+    state.updateContainerSize(1000f, 1000f)
+
+    // Excessive pinch zoom 15x
+    state.onTransform(
+      centroid = Offset(500f, 500f),
+      pan = Offset.Zero,
+      zoomChange = 15.0f
+    )
+
+    // Must be clamped to maxScale (8.0f)
+    assertEquals(8.0f, state.scale, 0.01f)
+    assertTrue(state.isZoomed)
+  }
+
+  @Test
+  fun testZoomResetToFit() {
+    val state = ZoomPanState()
+    state.updateContainerSize(1000f, 800f)
+    state.onTransform(Offset(500f, 400f), Offset(100f, 50f), 3.0f)
+    assertTrue(state.isZoomed)
+
+    state.resetImmediate()
+    assertEquals(1.0f, state.scale, 0.001f)
+    assertEquals(0f, state.offsetX, 0.001f)
+    assertEquals(0f, state.offsetY, 0.001f)
+    assertFalse(state.isZoomed)
   }
 }

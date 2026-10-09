@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,15 +36,17 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Compare
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Laptop
-import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.SaveAlt
+import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -61,14 +64,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
@@ -524,7 +531,7 @@ fun FilmLabDualPaneLayout(
             FilmLabTopBar(
                 hasPhoto = hasPhoto,
                 postureBadge = if (foldableLayout.posture == FoldableDevicePosture.BOOK_MODE) "BOOK POSTURE" else "UNFOLDED 35mm LAB",
-                postureIcon = if (foldableLayout.posture == FoldableDevicePosture.BOOK_MODE) Icons.Default.MenuBook else null,
+                postureIcon = if (foldableLayout.posture == FoldableDevicePosture.BOOK_MODE) Icons.AutoMirrored.Filled.MenuBook else null,
                 onInfoClick = onInfoClick,
                 onSaveClick = onSaveClick,
                 isSaving = uiState.saveStatus is SaveStatus.Saving
@@ -991,6 +998,14 @@ fun FilmViewport(
     val safeHeight = imageHeight.toFloat().coerceAtLeast(1f)
     val photoAspect = (safeWidth / safeHeight).coerceIn(0.30f, 3.2f)
 
+    val coroutineScope = rememberCoroutineScope()
+    val zoomState = rememberZoomPanState()
+
+    // Reset zoom when switching to a different photo
+    LaunchedEffect(baseBitmap) {
+        zoomState.resetImmediate()
+    }
+
     BoxWithConstraints(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
@@ -1021,35 +1036,65 @@ fun FilmViewport(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .pointerInput(Unit) {
+                    .clip(RoundedCornerShape(12.dp))
+                    .clipToBounds()
+                    .onSizeChanged { size ->
+                        zoomState.updateContainerSize(size.width.toFloat(), size.height.toFloat())
+                    }
+                    .pointerInput(zoomState) {
+                        detectTransformGestures { centroid, pan, zoom, _ ->
+                            zoomState.onTransform(centroid, pan, zoom)
+                        }
+                    }
+                    .pointerInput(zoomState) {
                         detectTapGestures(
+                            onDoubleTap = { tapOffset ->
+                                zoomState.onDoubleTap(tapOffset, coroutineScope)
+                            },
                             onPress = {
-                                onCompareStart()
-                                tryAwaitRelease()
-                                onCompareEnd()
+                                if (!zoomState.isZoomed) {
+                                    onCompareStart()
+                                    tryAwaitRelease()
+                                    onCompareEnd()
+                                } else {
+                                    tryAwaitRelease()
+                                }
                             }
                         )
                     }
                     .testTag("viewport_image_box"),
                 contentAlignment = Alignment.Center
             ) {
-                Image(
-                    bitmap = baseBitmap.asImageBitmap(),
-                    contentDescription = "Base 35mm scan",
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Fit
-                )
-
-                if (filmBitmap != null) {
-                    val filmAlpha = if (isComparing) 0f else intensity
+                // Scaled & panned 35mm photo emulsion layers
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            scaleX = zoomState.scale
+                            scaleY = zoomState.scale
+                            translationX = zoomState.offsetX
+                            translationY = zoomState.offsetY
+                        },
+                    contentAlignment = Alignment.Center
+                ) {
                     Image(
-                        bitmap = filmBitmap.asImageBitmap(),
-                        contentDescription = "Film simulated emulsion",
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .alpha(filmAlpha),
+                        bitmap = baseBitmap.asImageBitmap(),
+                        contentDescription = "Base 35mm scan",
+                        modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Fit
                     )
+
+                    if (filmBitmap != null) {
+                        val filmAlpha = if (isComparing) 0f else intensity
+                        Image(
+                            bitmap = filmBitmap.asImageBitmap(),
+                            contentDescription = "Film simulated emulsion",
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .alpha(filmAlpha),
+                            contentScale = ContentScale.Fit
+                        )
+                    }
                 }
 
                 if (isProcessing) {
@@ -1078,7 +1123,7 @@ fun FilmViewport(
                     }
                 }
 
-                // Preset Pill Badge
+                // Preset Pill Badge (Top-End)
                 Surface(
                     color = Color.Black.copy(alpha = 0.75f),
                     shape = RoundedCornerShape(6.dp),
@@ -1109,7 +1154,144 @@ fun FilmViewport(
                     }
                 }
 
-                // Hold to Compare Pill
+                // Zoom Loupe HUD & Preset Buttons (Top-Start)
+                Surface(
+                    color = Color.Black.copy(alpha = 0.80f),
+                    shape = RoundedCornerShape(8.dp),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (zoomState.isZoomed) KodachromeAmber.copy(alpha = 0.85f) else DarkroomSurfaceBorder
+                    ),
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(10.dp)
+                        .testTag("zoom_hud_bar")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ZoomIn,
+                            contentDescription = "Zoom Loupe",
+                            tint = if (zoomState.isZoomed) KodachromeAmber else DarkroomTextSecondary,
+                            modifier = Modifier.size(13.dp)
+                        )
+
+                        Text(
+                            text = zoomState.zoomLabel,
+                            color = if (zoomState.isZoomed) KodachromeAmber else DarkroomTextPrimary,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.testTag("zoom_level_badge")
+                        )
+
+                        // 1x Fit Preset Button
+                        Surface(
+                            color = if (!zoomState.isZoomed) KodachromeAmber.copy(alpha = 0.25f) else DarkroomSurfaceElevated,
+                            shape = RoundedCornerShape(4.dp),
+                            border = androidx.compose.foundation.BorderStroke(
+                                0.5.dp,
+                                if (!zoomState.isZoomed) KodachromeAmber else DarkroomSurfaceBorder
+                            ),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable { zoomState.setZoomPreset(1.0f, coroutineScope) }
+                                .testTag("zoom_1x_button")
+                        ) {
+                            Text(
+                                text = "1×",
+                                color = if (!zoomState.isZoomed) KodachromeAmber else DarkroomTextMuted,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                            )
+                        }
+
+                        // 2.5x Grain Loupe Preset Button
+                        Surface(
+                            color = if (zoomState.scale in 2.2f..2.8f) KodachromeAmber.copy(alpha = 0.25f) else DarkroomSurfaceElevated,
+                            shape = RoundedCornerShape(4.dp),
+                            border = androidx.compose.foundation.BorderStroke(
+                                0.5.dp,
+                                if (zoomState.scale in 2.2f..2.8f) KodachromeAmber else DarkroomSurfaceBorder
+                            ),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable { zoomState.setZoomPreset(2.5f, coroutineScope) }
+                                .testTag("zoom_2_5x_button")
+                        ) {
+                            Text(
+                                text = "2.5×",
+                                color = if (zoomState.scale in 2.2f..2.8f) KodachromeAmber else DarkroomTextSecondary,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                            )
+                        }
+
+                        // 5x Halide Detail Preset Button
+                        Surface(
+                            color = if (zoomState.scale in 4.5f..5.5f) KodachromeAmber.copy(alpha = 0.25f) else DarkroomSurfaceElevated,
+                            shape = RoundedCornerShape(4.dp),
+                            border = androidx.compose.foundation.BorderStroke(
+                                0.5.dp,
+                                if (zoomState.scale in 4.5f..5.5f) KodachromeAmber else DarkroomSurfaceBorder
+                            ),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable { zoomState.setZoomPreset(5.0f, coroutineScope) }
+                                .testTag("zoom_5x_button")
+                        ) {
+                            Text(
+                                text = "5×",
+                                color = if (zoomState.scale in 4.5f..5.5f) KodachromeAmber else DarkroomTextSecondary,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                            )
+                        }
+
+                        // Reset button appears whenever zoomed in
+                        if (zoomState.isZoomed) {
+                            Surface(
+                                color = KodachromeAmber,
+                                shape = RoundedCornerShape(4.dp),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .clickable { zoomState.reset(coroutineScope) }
+                                    .testTag("zoom_reset_button")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.RestartAlt,
+                                        contentDescription = "Reset Zoom",
+                                        tint = DarkroomBlack,
+                                        modifier = Modifier.size(11.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Text(
+                                        text = "FIT",
+                                        color = DarkroomBlack,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Hold to Compare Pill (Bottom-End)
                 Surface(
                     color = if (isComparing) KodachromeAmber else Color.Black.copy(alpha = 0.65f),
                     shape = RoundedCornerShape(20.dp),
@@ -1120,6 +1302,15 @@ fun FilmViewport(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
                         .padding(10.dp)
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onPress = {
+                                    onCompareStart()
+                                    tryAwaitRelease()
+                                    onCompareEnd()
+                                }
+                            )
+                        }
                         .testTag("hold_compare_pill")
                 ) {
                     Row(
@@ -1143,7 +1334,7 @@ fun FilmViewport(
                     }
                 }
 
-                // Calibrated 35mm grain resolution stamp
+                // Calibrated 35mm grain resolution stamp (Bottom-Start)
                 Surface(
                     color = Color.Black.copy(alpha = 0.65f),
                     shape = RoundedCornerShape(4.dp),
@@ -1152,8 +1343,12 @@ fun FilmViewport(
                         .padding(10.dp)
                 ) {
                     Text(
-                        text = "${imageWidth}×${imageHeight}px · 35mm Scan",
-                        color = DarkroomTextMuted,
+                        text = if (zoomState.isZoomed) {
+                            "${imageWidth}×${imageHeight}px · ${(zoomState.scale * 100).toInt()}% Mag"
+                        } else {
+                            "${imageWidth}×${imageHeight}px · 35mm Scan"
+                        },
+                        color = if (zoomState.isZoomed) KodachromeAmber else DarkroomTextMuted,
                         fontSize = 10.sp,
                         fontFamily = FontFamily.Monospace,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
