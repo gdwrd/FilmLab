@@ -20,7 +20,8 @@ data class RawMetadata(
     val originalHeight: Int = 0,
     val orientationDegrees: Int = 0,
     val sensorDescription: String? = null,
-    val isColorRecovered: Boolean = false
+    val isColorRecovered: Boolean = false,
+    val processingNote: String? = null
 ) {
     /**
      * Resolves human-friendly camera name, converting Sony internal model codes
@@ -28,7 +29,8 @@ data class RawMetadata(
      */
     val displayCameraName: String
         get() {
-            val rawModel = model?.trim() ?: return make ?: if (format.isRaw) format.formatName else "Standard 35mm"
+            val rawModel = model?.trim()?.takeIf { it.isNotEmpty() }
+                ?: return make?.takeIf { it.isNotBlank() } ?: "Unknown camera"
             val upperModel = rawModel.uppercase()
 
             return when {
@@ -76,10 +78,10 @@ data class RawMetadata(
 
     val resolvedBadgeLabel: String
         get() = when {
-            isLeica -> "RAW • LEICA DNG"
+            isLeica && format == RawFormat.DNG -> "RAW • LEICA DNG"
             format == RawFormat.SONY_ARW -> "RAW • SONY ARW"
             format == RawFormat.DNG -> "RAW • ADOBE DNG"
-            else -> "35mm SCAN"
+            else -> "IMAGE"
         }
 
     /**
@@ -92,7 +94,7 @@ data class RawMetadata(
             aperture?.let { parts.add(it) }
             shutterSpeed?.let { parts.add(it) }
             iso?.let { parts.add(it) }
-            return if (parts.isNotEmpty()) parts.joinToString(" · ") else "Full-Frame 35mm Raw Capture"
+            return parts.joinToString(" · ")
         }
 
     /**
@@ -100,10 +102,10 @@ data class RawMetadata(
      */
     val aspectRatioLabel: String
         get() {
-            if (originalWidth <= 0 || originalHeight <= 0) return "3:2"
+            if (originalWidth <= 0 || originalHeight <= 0) return "Unknown"
             val ratio = originalWidth.toFloat() / originalHeight.toFloat()
             return when {
-                ratio in 1.45f..1.55f || ratio in 0.63f..0.69f -> "3:2 (35mm)"
+                ratio in 1.45f..1.55f || ratio in 0.63f..0.69f -> "3:2"
                 ratio in 1.30f..1.38f || ratio in 0.72f..0.77f -> "4:3"
                 ratio in 1.70f..1.85f || ratio in 0.54f..0.59f -> "16:9"
                 ratio in 0.95f..1.05f -> "1:1"

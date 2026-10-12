@@ -2,6 +2,8 @@ package com.example.film
 
 import android.graphics.Bitmap
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withContext
@@ -165,7 +167,7 @@ object FilmEngine {
     }
 
     /**
-     * Normalizes any input bitmap to the calibrated 35mm long edge resolution (2048px),
+     * Limits the long edge to the calibrated 2048px working resolution without enlarging small photos,
      * preserving the original aspect ratio.
      */
     fun normalizeTo35mmResolution(source: Bitmap): Bitmap {
@@ -182,6 +184,8 @@ object FilmEngine {
     }
 
     fun calculate35mmDimensions(width: Int, height: Int): Pair<Int, Int> {
+        require(width > 0 && height > 0) { "Photo dimensions must be positive" }
+        if (max(width, height) <= TARGET_LONG_EDGE) return Pair(width, height)
         return if (width >= height) {
             val h = max(1, (height.toLong() * TARGET_LONG_EDGE / width).toInt())
             Pair(TARGET_LONG_EDGE, h)
@@ -346,11 +350,12 @@ object FilmEngine {
     // =========================================================================
     // 1. KODACHROME 64 (Reversal Slide Film, K-14 Process)
     // =========================================================================
-    private fun processKodachromeChunk(
+    private suspend fun processKodachromeChunk(
         src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int,
         intensity: Float, grainIntensity: Float
     ) {
         for (y in startY until endY) {
+            currentCoroutineContext().ensureActive()
             var rngState = (y * 31337 + 1013904223)
             val rowOffset = y * width
 
@@ -416,11 +421,12 @@ object FilmEngine {
     // =========================================================================
     // 2. KODAK PORTRA 400 (C-41 Professional Color Negative)
     // =========================================================================
-    private fun processPortraChunk(
+    private suspend fun processPortraChunk(
         src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int,
         intensity: Float, grainIntensity: Float
     ) {
         for (y in startY until endY) {
+            currentCoroutineContext().ensureActive()
             var rngState = (y * 39829 + 1729481)
             val rowOffset = y * width
 
@@ -481,11 +487,12 @@ object FilmEngine {
     // =========================================================================
     // 3. FUJIFILM VELVIA 50 (E-6 Ultra-Vivid Chrome Slide)
     // =========================================================================
-    private fun processVelviaChunk(
+    private suspend fun processVelviaChunk(
         src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int,
         intensity: Float, grainIntensity: Float
     ) {
         for (y in startY until endY) {
+            currentCoroutineContext().ensureActive()
             var rngState = (y * 53171 + 2491823)
             val rowOffset = y * width
 
@@ -550,13 +557,14 @@ object FilmEngine {
     // =========================================================================
     // 4. CINESTILL 800T (Tungsten 3200K Motion Picture & Red Halation)
     // =========================================================================
-    private fun processCineStillChunk(
+    private suspend fun processCineStillChunk(
         src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int, intensity: Float,
         halationMap: FloatArray, dsWidth: Int, grainIntensity: Float
     ) {
         val hasHalation = halationMap.isNotEmpty()
 
         for (y in startY until endY) {
+            currentCoroutineContext().ensureActive()
             var rngState = (y * 62723 + 3184917)
             val rowOffset = y * width
             val dy = y / 4
@@ -623,11 +631,12 @@ object FilmEngine {
     // =========================================================================
     // 5. FUJIFILM PRO 400H (C-41 4th-Layer Cyan Negative)
     // =========================================================================
-    private fun processPro400hChunk(
+    private suspend fun processPro400hChunk(
         src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int,
         intensity: Float, grainIntensity: Float
     ) {
         for (y in startY until endY) {
+            currentCoroutineContext().ensureActive()
             var rngState = (y * 41143 + 1883921)
             val rowOffset = y * width
 
@@ -689,11 +698,12 @@ object FilmEngine {
     // =========================================================================
     // 6. ILFORD HP5 PLUS (400 ISO Panchromatic B&W)
     // =========================================================================
-    private fun processIlfordHp5Chunk(
+    private suspend fun processIlfordHp5Chunk(
         src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int,
         intensity: Float, grainIntensity: Float
     ) {
         for (y in startY until endY) {
+            currentCoroutineContext().ensureActive()
             var rngState = (y * 45293 + 1664525)
             val rowOffset = y * width
 
@@ -737,11 +747,12 @@ object FilmEngine {
     // =========================================================================
     // 7. KODAK TRI-X 400 (D-76 Developer Photojournalism B&W)
     // =========================================================================
-    private fun processTriXChunk(
+    private suspend fun processTriXChunk(
         src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int,
         intensity: Float, grainIntensity: Float
     ) {
         for (y in startY until endY) {
+            currentCoroutineContext().ensureActive()
             var rngState = (y * 58211 + 2938171)
             val rowOffset = y * width
             val blockY = y shr 1

@@ -7,10 +7,10 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.Modifier
 import com.example.ui.FilmLabScreen
 import com.example.ui.FilmLabViewModel
-import com.example.ui.theme.DarkroomBlack
 import com.example.ui.theme.FilmLabTheme
 
 class MainActivity : ComponentActivity() {
@@ -24,7 +24,7 @@ class MainActivity : ComponentActivity() {
             FilmLabTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = DarkroomBlack
+                    color = MaterialTheme.colorScheme.background
                 ) {
                     FilmLabScreen(viewModel = viewModel)
                 }

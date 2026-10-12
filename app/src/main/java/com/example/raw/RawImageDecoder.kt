@@ -20,8 +20,9 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 
 private const val TAG = "RawImageDecoder"
-private const val MAX_DECODE_DIMENSION = 2560 // 35mm master lab scan resolution
+private const val MAX_DECODE_DIMENSION = 2560
 private const val MIN_FULL_RES_DIMENSION = 500 // Anything smaller is an EXIF thumbnail
+private const val EMBEDDED_PREVIEW_NOTE = "Using the camera's embedded JPEG preview; RAW sensor data was not decoded."
 
 data class RawDecodeResult(
     val bitmap: Bitmap,
@@ -52,11 +53,7 @@ object RawImageDecoder {
         return Pair(fileName, mimeType)
     }
 
-    /**
-     * Decodes an image URI with full support for DNG, Leica DNG, Sony ARW, and camera RAW formats.
-     * Guarantees extraction of the full-resolution sensor image or maximum-quality master preview,
-     * completely eliminating low-resolution thumbnail fallback.
-     */
+    /** Tries sensor data, embedded previews and Android's supported decoders in order. */
     suspend fun decodeImage(context: Context, uri: Uri): RawDecodeResult = withContext(Dispatchers.IO) {
         val (fileName, mimeType) = inspectUri(context, uri)
         val format = RawFormat.detect(fileName, mimeType)
@@ -74,15 +71,20 @@ object RawImageDecoder {
             val metadata = extractMetadataFromFile(tempFile, fileName, format)
 
             var decodedBitmap: Bitmap? = null
+            var processingNote: String? = null
+            var orientationApplied = false
 
             // Tier 0: Direct Bayer CFA & SubIFD color extraction for DNG (Leica DNG, Adobe DNG)
-            // Recovers authentic sensor Bayer CFA photodiode data, bypassing camera B&W profiles
-            if (format == RawFormat.DNG || format.isRaw) {
+            if (format.isRaw) {
                 try {
-                    val cfaBitmap = DngColorExtractor.extractColorBitmap(tempFile)
-                    if (cfaBitmap != null && isValidResolution(cfaBitmap)) {
-                        decodedBitmap = cfaBitmap
-                        Log.i(TAG, "DngColorExtractor successfully decoded authentic sensor CFA color data (${cfaBitmap.width}x${cfaBitmap.height}).")
+                    val extracted = DngColorExtractor.extractWithSource(tempFile)
+                    if (extracted != null && isValidResolution(extracted.bitmap)) {
+                        decodedBitmap = extracted.bitmap
+                        processingNote = if (extracted.isSensorData) {
+                            "Developed from RAW sensor data."
+                        } else {
+                            EMBEDDED_PREVIEW_NOTE
+                        }
                     }
                 } catch (e: Throwable) {
                     Log.w(TAG, "DngColorExtractor initial pass: ${e.message}")
@@ -97,6 +99,7 @@ object RawImageDecoder {
                     val largePreview = extractLargestEmbeddedJpeg(tempFile)
                     if (largePreview != null && isValidResolution(largePreview)) {
                         decodedBitmap = largePreview
+                        processingNote = EMBEDDED_PREVIEW_NOTE
                         Log.i(TAG, "Extracted high-resolution master preview (${largePreview.width}x${largePreview.height}) from RAW container.")
                     }
                 } catch (e: Throwable) {
@@ -110,6 +113,7 @@ object RawImageDecoder {
                     val platformBitmap = decodeWithImageDecoder(context, uri)
                     if (isValidResolution(platformBitmap)) {
                         decodedBitmap = platformBitmap
+                        orientationApplied = true
                     } else {
                         Log.w(TAG, "ImageDecoder returned thumbnail (${platformBitmap.width}x${platformBitmap.height}). Discarding to find full image.")
                     }
@@ -127,16 +131,12 @@ object RawImageDecoder {
                 throw IllegalStateException("Failed to decode image from $uri (Format: ${format.formatName})")
             }
 
-            // Tier 4: Rotate if orientation requires it
-            if (metadata.orientationDegrees != 0) {
-                decodedBitmap = applyOrientation(decodedBitmap, metadata.orientationDegrees)
+            if (format.isRaw && processingNote == null) {
+                processingNote = "Android opened this RAW file; it may use the camera's preview."
             }
 
-            // Tier 5: Automatic Color Recovery for RAW files shot with in-camera B&W / Monochrome picture profiles
-            // If the RAW image was captured with B&W style enabled on camera, recover real original colors!
             var isColorRecovered = false
             if (format.isRaw && RawColorRecoveryEngine.isMonochrome(decodedBitmap)) {
-                Log.i(TAG, "RAW photo (${metadata.displayCameraName}) is monochrome (shot with in-camera B&W profile). Recovering original sensor colors...")
                 val (colorBitmap, recovered) = RawColorRecoveryEngine.recoverRealColors(
                     context = context,
                     uri = uri,
@@ -146,16 +146,30 @@ object RawImageDecoder {
                 )
                 decodedBitmap = colorBitmap
                 isColorRecovered = recovered
+                if (recovered) {
+                    processingNote = "Colour decoded from RAW sensor data."
+                    orientationApplied = false
+                } else {
+                    processingNote = "$processingNote No colour data was recovered; the monochrome image has been kept."
+                }
             }
 
-            val finalWidth = if (metadata.originalWidth > decodedBitmap.width) metadata.originalWidth else decodedBitmap.width
-            val finalHeight = if (metadata.originalHeight > decodedBitmap.height) metadata.originalHeight else decodedBitmap.height
+            val dimensionsRotated = orientationApplied && metadata.orientationDegrees in listOf(90, 270)
+            val sourceWidth = if (dimensionsRotated) decodedBitmap.height else decodedBitmap.width
+            val sourceHeight = if (dimensionsRotated) decodedBitmap.width else decodedBitmap.height
+            val finalWidth = max(metadata.originalWidth, sourceWidth)
+            val finalHeight = max(metadata.originalHeight, sourceHeight)
+
+            // ImageDecoder applies EXIF orientation itself; extracted sensor and preview pixels do not.
+            if (!orientationApplied && metadata.orientationDegrees != 0) {
+                decodedBitmap = applyOrientation(decodedBitmap, metadata.orientationDegrees)
+            }
 
             val finalMetadata = metadata.copy(
                 originalWidth = finalWidth,
                 originalHeight = finalHeight,
                 isColorRecovered = isColorRecovered,
-                colorSpace = if (isColorRecovered) "Restored Full Sensor Color (B&W Bypassed)" else metadata.colorSpace
+                processingNote = processingNote
             )
 
             RawDecodeResult(bitmap = decodedBitmap, metadata = finalMetadata)
@@ -332,10 +346,9 @@ object RawImageDecoder {
         try {
             val exif = ExifInterface(file)
 
-            make = exif.getAttribute(ExifInterface.TAG_MAKE)?.trim()
-            model = exif.getAttribute(ExifInterface.TAG_MODEL)?.trim()
-            lensModel = exif.getAttribute(ExifInterface.TAG_LENS_MODEL)?.trim()
-                ?: exif.getAttribute("LensModel")?.trim()
+            make = exif.getAttribute(ExifInterface.TAG_MAKE)?.trim()?.takeIf { it.isNotEmpty() }
+            model = exif.getAttribute(ExifInterface.TAG_MODEL)?.trim()?.takeIf { it.isNotEmpty() }
+            lensModel = exif.getAttribute(ExifInterface.TAG_LENS_MODEL)?.trim()?.takeIf { it.isNotEmpty() }
 
             val rawFocal = exif.getAttributeDouble(ExifInterface.TAG_FOCAL_LENGTH, 0.0)
             if (rawFocal > 0.0) {
@@ -374,9 +387,9 @@ object RawImageDecoder {
                 ?: exif.getAttribute(ExifInterface.TAG_DATETIME)
 
             colorSpace = when (exif.getAttributeInt(ExifInterface.TAG_COLOR_SPACE, 0)) {
-                1 -> "sRGB (Rec.709)"
+                1 -> "sRGB"
                 2 -> "Adobe RGB"
-                else -> if (format.isRaw) "Camera Native RAW Gamut" else "sRGB"
+                else -> null
             }
 
             width = exif.getAttributeInt(ExifInterface.TAG_IMAGE_WIDTH, 0)
@@ -402,20 +415,6 @@ object RawImageDecoder {
             Log.w(TAG, "Failed reading EXIF metadata for file: ${e.message}")
         }
 
-        if (make == null && format == RawFormat.SONY_ARW) {
-            make = "SONY"
-        }
-
-        val isLeica = make?.contains("Leica", ignoreCase = true) == true ||
-                model?.contains("Leica", ignoreCase = true) == true
-
-        val sensorDesc = when {
-            format == RawFormat.SONY_ARW -> "35mm Full-Frame BSI Exmor R CMOS • 14-bit ARW"
-            isLeica -> "Leica Full-Frame Maestro • Full Dynamic Color DNG"
-            format == RawFormat.DNG -> "Adobe DNG • Linear/Bayer CFA Negative"
-            else -> "Standard 8-bit RGB Scan"
-        }
-
         return RawMetadata(
             format = format,
             fileName = fileName,
@@ -431,8 +430,7 @@ object RawImageDecoder {
             colorSpace = colorSpace,
             originalWidth = width,
             originalHeight = height,
-            orientationDegrees = orientationDegrees,
-            sensorDescription = sensorDesc
+            orientationDegrees = orientationDegrees
         )
     }
 

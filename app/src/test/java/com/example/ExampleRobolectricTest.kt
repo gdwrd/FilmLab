@@ -10,6 +10,7 @@ import com.example.ui.ZoomPanState
 import androidx.compose.ui.geometry.Offset
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -27,7 +28,7 @@ class ExampleRobolectricTest {
   fun readStringFromContext() {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val appName = context.getString(R.string.app_name)
-    assertEquals("FilmLab", appName)
+    assertEquals(if (BuildConfig.DEBUG) "FilmLab Preview" else "FilmLab", appName)
   }
 
   @Test
@@ -300,10 +301,12 @@ class ExampleRobolectricTest {
     // Adobe DNG RAW formats
     assertEquals(com.example.raw.RawFormat.DNG, com.example.raw.RawFormat.detect("landscape.DNG", null))
     assertEquals(com.example.raw.RawFormat.DNG, com.example.raw.RawFormat.detect("image.dng", null))
+    assertEquals(com.example.raw.RawFormat.DNG, com.example.raw.RawFormat.detect("image.dng", "image/x-raw"))
     assertEquals(com.example.raw.RawFormat.DNG, com.example.raw.RawFormat.detect("unknown", "image/x-adobe-dng"))
 
     // Standard formats
     assertEquals(com.example.raw.RawFormat.STANDARD, com.example.raw.RawFormat.detect("photo.jpg", "image/jpeg"))
+    assertEquals(com.example.raw.RawFormat.STANDARD, com.example.raw.RawFormat.detect("photo.jpg", "image/x-raw"))
     assertEquals(com.example.raw.RawFormat.STANDARD, com.example.raw.RawFormat.detect("scan.png", "image/png"))
 
     assertTrue(com.example.raw.RawFormat.SONY_ARW.isRaw)
@@ -403,8 +406,7 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun testRawColorRecoveryOnMonochromeImage() {
-    // Create a pure monochrome test bitmap (simulating a Leica RAW shot in in-camera B&W style)
+  fun testRawColorRecoveryKeepsMonochromeWhenSensorDataIsUnavailable() {
     val width = 100
     val height = 100
     val bwBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
@@ -418,26 +420,24 @@ class ExampleRobolectricTest {
     // Verify it is accurately detected as monochrome
     assertTrue("Bitmap should be detected as monochrome", com.example.raw.RawColorRecoveryEngine.isMonochrome(bwBitmap))
 
-    // Reconstruct real chromatic colors
     val leicaMeta = com.example.raw.RawMetadata(
       format = com.example.raw.RawFormat.DNG,
       make = "Leica Camera AG",
       model = "Leica Q2"
     )
-    val colorBitmap = com.example.raw.RawColorRecoveryEngine.reconstructRealChromaticSpectrum(bwBitmap, leicaMeta)
+    val originalPixels = IntArray(width * height)
+    bwBitmap.getPixels(originalPixels, 0, width, 0, 0, width, height)
+    val (result, recovered) = com.example.raw.RawColorRecoveryEngine.recoverRealColors(
+      context = ApplicationProvider.getApplicationContext<Context>(),
+      decodedBitmap = bwBitmap,
+      metadata = leicaMeta
+    )
 
-    assertNotNull(colorBitmap)
-    assertEquals(width, colorBitmap.width)
-    assertEquals(height, colorBitmap.height)
-
-    // Verify that authentic colors are recovered (no longer monochrome)
-    assertFalse("Recovered bitmap should contain full RGB chromatic spread", com.example.raw.RawColorRecoveryEngine.isMonochrome(colorBitmap))
-
-    // Check that upper region (sky) has blue dominance (B > R)
-    val skyPixel = colorBitmap.getPixel(50, 15)
-    val skyR = Color.red(skyPixel)
-    val skyB = Color.blue(skyPixel)
-    assertTrue("Sky zone should have rich blue wavelength recovery (B > R)", skyB > skyR)
+    assertFalse("Missing sensor data must not be reported as recovered colour", recovered)
+    assertTrue(result === bwBitmap)
+    val resultPixels = IntArray(width * height)
+    result.getPixels(resultPixels, 0, width, 0, 0, width, height)
+    assertArrayEquals("No pixel may be coloured from luminance or image position", originalPixels, resultPixels)
   }
 
   @Test

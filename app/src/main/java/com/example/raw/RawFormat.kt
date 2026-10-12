@@ -35,7 +35,7 @@ enum class RawFormat(
     ),
     STANDARD(
         formatName = "Standard Image",
-        badgeLabel = "35mm SCAN",
+        badgeLabel = "IMAGE",
         extensions = listOf("jpg", "jpeg", "png", "webp", "heic", "heif"),
         mimeTypes = listOf("image/jpeg", "image/png", "image/webp", "image/heic")
     );
@@ -48,10 +48,13 @@ enum class RawFormat(
             val ext = fileName?.substringAfterLast('.', "")?.lowercase(Locale.ROOT)
             val mime = mimeType?.lowercase(Locale.ROOT)
 
-            if (ext in SONY_ARW.extensions || mime in SONY_ARW.mimeTypes) {
+            // A known extension is more specific than a provider's generic RAW MIME type.
+            entries.firstOrNull { ext in it.extensions }?.let { return it }
+
+            if (mime in SONY_ARW.mimeTypes) {
                 return SONY_ARW
             }
-            if (ext in DNG.extensions || mime in DNG.mimeTypes) {
+            if (mime in DNG.mimeTypes) {
                 return DNG
             }
             return STANDARD

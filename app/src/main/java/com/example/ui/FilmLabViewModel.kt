@@ -1,317 +1,311 @@
 package com.example.ui
 
 import android.app.Application
-import android.content.ContentValues
 import android.content.Context
-import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Paint
 import android.net.Uri
-import android.os.Build
-import android.os.Environment
-import android.provider.MediaStore
-import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.film.FilmEngine
 import com.example.film.FilmPreset
 import com.example.raw.RawImageDecoder
 import com.example.raw.RawMetadata
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
-import java.io.FileOutputStream
+import java.util.concurrent.atomic.AtomicLong
+import kotlin.math.max
+import kotlin.math.roundToInt
 
 sealed interface SaveStatus {
-    object Idle : SaveStatus
-    object Saving : SaveStatus
-    data class Success(val message: String) : SaveStatus
+    data object Idle : SaveStatus
+    data object Saving : SaveStatus
+    data class Success(val message: String, val uri: Uri) : SaveStatus
     data class Error(val error: String) : SaveStatus
 }
 
 data class FilmLabUiState(
     val baseBitmap: Bitmap? = null,
     val filmFullBitmap: Bitmap? = null,
-    val selectedPreset: FilmPreset = FilmPreset.KODACHROME_64,
-    val intensity: Float = 1.0f,
-    val grainIntensity: Float = 1.0f,
+    val selectedPreset: FilmPreset = FilmPreset.ORIGINAL,
+    val intensity: Float = 1f,
+    val grainIntensity: Float = 1f,
     val isComparing: Boolean = false,
     val isProcessing: Boolean = false,
+    val isImporting: Boolean = false,
+    val showWelcome: Boolean = true,
     val activeSampleId: String? = null,
-    val imageWidth: Int = 2048,
-    val imageHeight: Int = 1365,
+    val imageWidth: Int = 0,
+    val imageHeight: Int = 0,
     val rawMetadata: RawMetadata? = null,
-    val saveStatus: SaveStatus = SaveStatus.Idle,
-    val showInfoSheet: Boolean = false,
-    val showMetadataSheet: Boolean = false
+    val presetPreviews: Map<FilmPreset, Bitmap> = emptyMap(),
+    val errorMessage: String? = null,
+    val saveStatus: SaveStatus = SaveStatus.Idle
 )
 
 class FilmLabViewModel(application: Application) : AndroidViewModel(application) {
-
     private val _uiState = MutableStateFlow(FilmLabUiState())
     val uiState: StateFlow<FilmLabUiState> = _uiState.asStateFlow()
-
+    private val draft = EditDraftStore(application)
+    private val draftRevision = AtomicLong()
+    private var imageGeneration = 0L
+    private var importJob: Job? = null
     private var filterJob: Job? = null
-    private var grainDebounceJob: Job? = null
+    private var thumbnailJob: Job? = null
+    private var draftJob: Job? = null
+    private var saveJob: Job? = null
 
     init {
-        // App launches cleanly ready for the user's gallery photo or RAW files
+        val generation = imageGeneration
+        importJob = viewModelScope.launch {
+            try {
+                val restored = withContext(Dispatchers.IO) { draft.load() } ?: return@launch
+                if (generation != imageGeneration) return@launch
+                _uiState.value = restored
+                restored.baseBitmap?.let {
+                    recomputeFilmEffect()
+                    generatePreviews(it, generation)
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                _uiState.update { it.copy(errorMessage = "Your last edit could not be restored. Choose a photo to start again.") }
+            }
+        }
+    }
+
+    fun onImagePicked(uri: Uri): Job {
+        val generation = beginImport()
+        return viewModelScope.launch {
+            try {
+                val decoded = RawImageDecoder.decodeImage(getApplication(), uri)
+                val bitmap = withContext(Dispatchers.Default) { FilmEngine.normalizeTo35mmResolution(decoded.bitmap) }
+                currentCoroutineContext().ensureActive()
+                if (generation == imageGeneration) setPhoto(bitmap, decoded.metadata, generation)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                if (generation == imageGeneration) {
+                    _uiState.update { it.copy(isImporting = false, isProcessing = false, errorMessage = "This photo could not be opened. Try another photo or a JPEG exported by your camera.") }
+                    restoreRetainedPreview()
+                }
+            }
+        }.also { importJob = it }
+    }
+
+    private fun beginImport(): Long {
+        imageGeneration++
+        importJob?.cancel()
+        filterJob?.cancel()
+        thumbnailJob?.cancel()
+        _uiState.update { it.copy(isImporting = true, isProcessing = false, isComparing = false, errorMessage = null) }
+        return imageGeneration
+    }
+
+    private fun setPhoto(bitmap: Bitmap, metadata: RawMetadata?, generation: Long, sampleId: String? = null) {
+        _uiState.value = FilmLabUiState(
+            baseBitmap = bitmap, filmFullBitmap = bitmap, rawMetadata = metadata,
+            imageWidth = bitmap.width, imageHeight = bitmap.height,
+            activeSampleId = sampleId, showWelcome = false,
+            saveStatus = if (saveJob?.isActive == true) SaveStatus.Saving else SaveStatus.Idle
+        )
+        persistDraft(immediately = true)
+        generatePreviews(bitmap, generation)
     }
 
     fun loadSampleSync(sampleId: String) {
-        val rawSample = SamplePhotos.generateSampleBitmap(sampleId)
-        val metadata = SamplePhotos.getSampleMetadata(sampleId)
-        val normalized = FilmEngine.normalizeTo35mmResolution(rawSample)
-        _uiState.update {
-            it.copy(
-                baseBitmap = normalized,
-                imageWidth = normalized.width,
-                imageHeight = normalized.height,
-                rawMetadata = metadata,
-                activeSampleId = sampleId,
-                isProcessing = false
-            )
-        }
-        recomputeFilmEffect(normalized, _uiState.value.selectedPreset, _uiState.value.grainIntensity)
-    }
-
-    fun loadSample(sampleId: String): Job = viewModelScope.launch {
-        _uiState.update { it.copy(isProcessing = true, activeSampleId = sampleId) }
-        val rawSample = withContext(Dispatchers.Default) {
-            SamplePhotos.generateSampleBitmap(sampleId)
-        }
-        val metadata = SamplePhotos.getSampleMetadata(sampleId)
-        val normalized = withContext(Dispatchers.Default) {
-            FilmEngine.normalizeTo35mmResolution(rawSample)
-        }
-        _uiState.update {
-            it.copy(
-                baseBitmap = normalized,
-                imageWidth = normalized.width,
-                imageHeight = normalized.height,
-                rawMetadata = metadata,
-                activeSampleId = sampleId
-            )
-        }
-        recomputeFilmEffect(normalized, _uiState.value.selectedPreset, _uiState.value.grainIntensity)
-    }
-
-    fun onImagePicked(uri: Uri): Job = viewModelScope.launch {
-            _uiState.update { it.copy(isProcessing = true, activeSampleId = null) }
-            try {
-                val context = getApplication<Application>()
-                val decodeResult = RawImageDecoder.decodeImage(context, uri)
-
-                val normalized = withContext(Dispatchers.Default) {
-                    FilmEngine.normalizeTo35mmResolution(decodeResult.bitmap)
-                }
-                _uiState.update {
-                    it.copy(
-                        baseBitmap = normalized,
-                        imageWidth = normalized.width,
-                        imageHeight = normalized.height,
-                        rawMetadata = decodeResult.metadata,
-                        activeSampleId = null
-                    )
-                }
-                recomputeFilmEffect(normalized, _uiState.value.selectedPreset, _uiState.value.grainIntensity)
-            } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(
-                        isProcessing = false,
-                        saveStatus = SaveStatus.Error("Error decoding photo/RAW file: ${e.localizedMessage}")
-                    )
-                }
-            }
-        }
-
-    fun selectPreset(preset: FilmPreset) {
-        if (_uiState.value.selectedPreset == preset && _uiState.value.filmFullBitmap != null) {
-            return
-        }
-        _uiState.update { it.copy(selectedPreset = preset) }
-        val base = _uiState.value.baseBitmap ?: return
-        recomputeFilmEffect(base, preset, _uiState.value.grainIntensity)
-    }
-
-    fun setIntensity(intensity: Float) {
-        _uiState.update { it.copy(intensity = intensity.coerceIn(0f, 1f)) }
-    }
-
-    fun setGrainIntensity(grainIntensity: Float) {
-        val clamped = grainIntensity.coerceIn(0f, 2.0f)
-        _uiState.update { it.copy(grainIntensity = clamped) }
-        val base = _uiState.value.baseBitmap ?: return
-        grainDebounceJob?.cancel()
-        grainDebounceJob = viewModelScope.launch {
-            kotlinx.coroutines.delay(40)
-            recomputeFilmEffect(base, _uiState.value.selectedPreset, clamped)
-        }
-    }
-
-    fun resetGrainIntensity() {
-        grainDebounceJob?.cancel()
-        val clamped = 1.0f
-        _uiState.update { it.copy(grainIntensity = clamped) }
-        val base = _uiState.value.baseBitmap ?: return
-        recomputeFilmEffect(base, _uiState.value.selectedPreset, clamped)
-    }
-
-    fun setComparing(comparing: Boolean) {
-        _uiState.update { it.copy(isComparing = comparing) }
-    }
-
-    fun toggleInfoSheet(show: Boolean) {
-        _uiState.update { it.copy(showInfoSheet = show) }
-    }
-
-    fun toggleMetadataSheet(show: Boolean) {
-        _uiState.update { it.copy(showMetadataSheet = show) }
-    }
-
-    fun dismissSaveStatus() {
-        _uiState.update { it.copy(saveStatus = SaveStatus.Idle) }
-    }
-
-    private fun recomputeFilmEffect(
-        base: Bitmap,
-        preset: FilmPreset,
-        grainIntensity: Float = _uiState.value.grainIntensity
-    ) {
-        filterJob?.cancel()
-        filterJob = viewModelScope.launch {
-            if (preset == FilmPreset.ORIGINAL) {
-                _uiState.update {
-                    it.copy(
-                        filmFullBitmap = base,
-                        isProcessing = false
-                    )
-                }
-                return@launch
-            }
-
-            _uiState.update { it.copy(isProcessing = true) }
-            val processed = FilmEngine.applyFilmFilter(base, preset, 1.0f, grainIntensity)
-            _uiState.update {
-                it.copy(
-                    filmFullBitmap = processed,
-                    isProcessing = false
-                )
-            }
-        }
-    }
-
-    /**
-     * Renders the final blended 2048px master bitmap based on current preset, intensity, and grain physics.
-     */
-    suspend fun renderCurrentMasterBitmap(): Bitmap? = withContext(Dispatchers.Default) {
-        val state = _uiState.value
-        val base = state.baseBitmap ?: return@withContext null
-        if (state.selectedPreset == FilmPreset.ORIGINAL || state.intensity <= 0.001f) {
-            return@withContext base
-        }
-        return@withContext FilmEngine.applyFilmFilter(
-            base,
-            state.selectedPreset,
-            state.intensity,
-            state.grainIntensity
+        val generation = beginImport()
+        setPhoto(
+            FilmEngine.normalizeTo35mmResolution(SamplePhotos.generateSampleBitmap(sampleId)),
+            SamplePhotos.getSampleMetadata(sampleId), generation, sampleId
         )
     }
 
-    fun saveToGallery(context: Context) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(saveStatus = SaveStatus.Saving) }
+    fun loadSample(sampleId: String): Job {
+        val generation = beginImport()
+        return viewModelScope.launch {
+            val bitmap = withContext(Dispatchers.Default) { SamplePhotos.generateSampleBitmap(sampleId) }
+            if (generation == imageGeneration) setPhoto(bitmap, SamplePhotos.getSampleMetadata(sampleId), generation, sampleId)
+        }.also { importJob = it }
+    }
+
+    fun selectPreset(preset: FilmPreset) {
+        if (_uiState.value.selectedPreset == preset) return
+        _uiState.update { it.copy(selectedPreset = preset, isComparing = false) }
+        recomputeFilmEffect()
+        persistDraft()
+    }
+
+    fun setIntensity(intensity: Float) {
+        if (!intensity.isFinite()) return
+        _uiState.update { it.copy(intensity = intensity.coerceIn(0f, 1f), isComparing = false) }
+        persistDraft()
+    }
+
+    fun setGrainIntensity(grainIntensity: Float) {
+        if (!grainIntensity.isFinite()) return
+        _uiState.update { it.copy(grainIntensity = grainIntensity.coerceIn(0f, 2f), isComparing = false) }
+        recomputeFilmEffect(debounce = true)
+        persistDraft()
+    }
+
+    fun resetGrainIntensity() {
+        _uiState.update { it.copy(grainIntensity = 1f, isComparing = false) }
+        recomputeFilmEffect()
+        persistDraft()
+    }
+
+    fun resetAdjustments() {
+        _uiState.update { it.copy(intensity = 1f, grainIntensity = 1f, isComparing = false) }
+        recomputeFilmEffect()
+        persistDraft()
+    }
+
+    fun setComparing(comparing: Boolean) {
+        _uiState.update { it.copy(isComparing = comparing && it.baseBitmap != null) }
+    }
+
+    fun openWelcome() {
+        val cancelledImport = _uiState.value.isImporting
+        if (_uiState.value.isImporting) {
+            imageGeneration++
+            importJob?.cancel()
+        }
+        _uiState.update { it.copy(showWelcome = true, isComparing = false, isImporting = false) }
+        if (cancelledImport) restoreRetainedPreview()
+        persistDraft(immediately = true)
+    }
+
+    fun resumeEditing() {
+        if (_uiState.value.baseBitmap != null) _uiState.update { it.copy(showWelcome = false) }
+    }
+
+    fun dismissError() {
+        _uiState.update { it.copy(errorMessage = null) }
+    }
+
+    fun dismissSaveStatus() {
+        if (saveJob?.isActive != true) _uiState.update { it.copy(saveStatus = SaveStatus.Idle) }
+    }
+
+    private fun restoreRetainedPreview() {
+        _uiState.value.baseBitmap?.let {
+            recomputeFilmEffect()
+            generatePreviews(it, imageGeneration)
+        }
+    }
+
+    private fun recomputeFilmEffect(debounce: Boolean = false) {
+        filterJob?.cancel()
+        val snapshot = _uiState.value
+        val base = snapshot.baseBitmap ?: return
+        val generation = imageGeneration
+        if (snapshot.selectedPreset == FilmPreset.ORIGINAL) {
+            _uiState.update { it.copy(filmFullBitmap = base, isProcessing = false) }
+            return
+        }
+        _uiState.update { it.copy(isProcessing = true) }
+        filterJob = viewModelScope.launch {
             try {
-                val masterBitmap = renderCurrentMasterBitmap()
-                if (masterBitmap == null) {
-                    _uiState.update { it.copy(saveStatus = SaveStatus.Error("No image available to save")) }
-                    return@launch
+                if (debounce) delay(80)
+                val processed = FilmEngine.applyFilmFilter(base, snapshot.selectedPreset, 1f, snapshot.grainIntensity)
+                currentCoroutineContext().ensureActive()
+                if (generation == imageGeneration) {
+                    _uiState.update { it.copy(filmFullBitmap = processed, isProcessing = false) }
                 }
-
-                val preset = _uiState.value.selectedPreset
-                val filename = "FilmLab_${preset.shortCode}_${System.currentTimeMillis()}.jpg"
-
-                withContext(Dispatchers.IO) {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        val contentValues = ContentValues().apply {
-                            put(MediaStore.Images.Media.DISPLAY_NAME, filename)
-                            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-                            put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/FilmLab")
-                            put(MediaStore.Images.Media.IS_PENDING, 1)
-                        }
-
-                        val resolver = context.contentResolver
-                        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
-                            ?: throw IllegalStateException("Could not create MediaStore entry")
-
-                        resolver.openOutputStream(uri)?.use { stream ->
-                            masterBitmap.compress(Bitmap.CompressFormat.JPEG, 97, stream)
-                        }
-
-                        contentValues.clear()
-                        contentValues.put(MediaStore.Images.Media.IS_PENDING, 0)
-                        resolver.update(uri, contentValues, null, null)
-                    } else {
-                        val picturesDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
-                        val filmLabDir = File(picturesDir, "FilmLab").apply { mkdirs() }
-                        val file = File(filmLabDir, filename)
-                        FileOutputStream(file).use { out ->
-                            masterBitmap.compress(Bitmap.CompressFormat.JPEG, 97, out)
-                        }
-                    }
-                }
-
-                _uiState.update {
-                    it.copy(
-                        saveStatus = SaveStatus.Success(
-                            "Saved 35mm scan (${masterBitmap.width}x${masterBitmap.height}) to Pictures/FilmLab"
-                        )
-                    )
-                }
-            } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(saveStatus = SaveStatus.Error("Failed to save: ${e.localizedMessage}"))
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                if (generation == imageGeneration) {
+                    _uiState.update { it.copy(selectedPreset = FilmPreset.ORIGINAL, filmFullBitmap = base, isProcessing = false, errorMessage = "This film could not be applied. Your original photo is still available.") }
+                    persistDraft()
                 }
             }
         }
     }
 
-    fun shareImage(context: Context) {
-        viewModelScope.launch {
+    private fun generatePreviews(bitmap: Bitmap, generation: Long) {
+        thumbnailJob?.cancel()
+        thumbnailJob = viewModelScope.launch {
             try {
-                val masterBitmap = renderCurrentMasterBitmap() ?: return@launch
-                val uri = withContext(Dispatchers.IO) {
-                    val cacheDir = File(context.cacheDir, "images").apply { mkdirs() }
-                    val file = File(cacheDir, "filmlab_share_${System.currentTimeMillis()}.jpg")
-                    FileOutputStream(file).use { out ->
-                        masterBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
-                    }
-                    FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                val preview = withContext(Dispatchers.Default) {
+                    val scale = minOf(1f, 192f / max(bitmap.width, bitmap.height))
+                    Bitmap.createScaledBitmap(bitmap, max(1, (bitmap.width * scale).roundToInt()), max(1, (bitmap.height * scale).roundToInt()), true)
                 }
+                for (preset in FilmPreset.entries) {
+                    currentCoroutineContext().ensureActive()
+                    // Grain is subpixel in the strip; avoid amplifying it on the small preview.
+                    val rendered = if (preset == FilmPreset.ORIGINAL) preview else FilmEngine.applyFilmFilter(preview, preset, 1f, 0f)
+                    if (generation != imageGeneration) return@launch
+                    _uiState.update { it.copy(presetPreviews = it.presetPreviews + (preset to rendered)) }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                // The full editor remains usable if a thumbnail cannot be rendered.
+            }
+        }
+    }
 
-                val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                    type = "image/jpeg"
-                    putExtra(Intent.EXTRA_STREAM, uri)
-                    putExtra(
-                        Intent.EXTRA_TEXT,
-                        "35mm film scan developed with FilmLab (${_uiState.value.selectedPreset.displayName})"
-                    )
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    private fun persistDraft(immediately: Boolean = false) {
+        val revision = draftRevision.incrementAndGet()
+        draftJob?.cancel()
+        val snapshot = _uiState.value
+        if (snapshot.baseBitmap == null) return
+        draftJob = viewModelScope.launch {
+            try {
+                if (!immediately) delay(200)
+                withContext(Dispatchers.IO) { draft.save(snapshot) { draftRevision.get() == revision } }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                if (draftRevision.get() == revision) {
+                    _uiState.update { it.copy(errorMessage = "Your edit could not be kept on this device. Save a copy before leaving.") }
                 }
+            }
+        }
+    }
 
-                val chooser = Intent.createChooser(shareIntent, "Share 35mm Film Scan")
-                chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                context.startActivity(chooser)
-            } catch (e: Exception) {
-                _uiState.update {
-                    it.copy(saveStatus = SaveStatus.Error("Failed to share image: ${e.localizedMessage}"))
-                }
+    suspend fun renderCurrentMasterBitmap(): Bitmap? = renderSnapshot(_uiState.value)
+
+    private suspend fun renderSnapshot(state: FilmLabUiState): Bitmap? = withContext(Dispatchers.Default) {
+        val base = state.baseBitmap ?: return@withContext null
+        if (state.selectedPreset == FilmPreset.ORIGINAL || state.intensity <= 0f) return@withContext base
+        val film = state.filmFullBitmap ?: return@withContext null
+        if (state.intensity >= 1f) return@withContext film
+        Bitmap.createBitmap(base.width, base.height, Bitmap.Config.ARGB_8888).also { output ->
+            Canvas(output).apply {
+                drawBitmap(base, 0f, 0f, null)
+                drawBitmap(film, 0f, 0f, Paint().apply { alpha = (state.intensity * 255).roundToInt() })
+            }
+        }
+    }
+
+    fun saveToGallery(context: Context) {
+        val snapshot = _uiState.value
+        if (snapshot.baseBitmap == null || snapshot.isImporting || snapshot.isProcessing || saveJob?.isActive == true) return
+        _uiState.update { it.copy(saveStatus = SaveStatus.Saving) }
+        saveJob = viewModelScope.launch {
+            try {
+                val bitmap = renderSnapshot(snapshot) ?: error("No photo available")
+                val filename = "FilmLab_" + snapshot.selectedPreset.shortCode + "_" + System.currentTimeMillis() + ".jpg"
+                val uri = GalleryExporter.save(context.applicationContext, bitmap, filename)
+                _uiState.update { it.copy(saveStatus = SaveStatus.Success("Saved to gallery", uri)) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                _uiState.update { it.copy(saveStatus = SaveStatus.Error("The photo could not be saved. Check available storage and try again.")) }
             }
         }
     }

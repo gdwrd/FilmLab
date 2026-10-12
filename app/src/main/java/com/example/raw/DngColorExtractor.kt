@@ -7,7 +7,6 @@ import android.graphics.Color
 import android.net.Uri
 import android.util.Log
 import java.io.File
-import java.io.FileInputStream
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -18,12 +17,10 @@ import kotlin.math.roundToInt
 private const val TAG = "DngColorExtractor"
 private const val MAX_DIMENSION = 2560
 
-/**
- * High-performance parser for Adobe DNG and Leica DNG camera files.
- * Extracts authentic sensor Bayer CFA (Color Filter Array) data and SubIFD color streams,
- * bypassing in-camera Black & White picture profiles and monochrome preview JPEGs.
- */
+/** Reads supported TIFF sensor data or embedded JPEG previews. */
 object DngColorExtractor {
+
+    data class ExtractedBitmap(val bitmap: Bitmap, val isSensorData: Boolean)
 
     data class SubIfdInfo(
         val width: Int,
@@ -37,13 +34,17 @@ object DngColorExtractor {
     )
 
     /**
-     * Attempts to extract full-color sensor bitmap from DNG file on disk.
+     * Attempts to decode sensor data or a JPEG preview from a DNG file.
      */
     fun extractColorBitmap(file: File): Bitmap? {
+        return extractWithSource(file)?.bitmap
+    }
+
+    fun extractWithSource(file: File): ExtractedBitmap? {
         if (!file.exists() || file.length() < 16) return null
         return try {
             RandomAccessFile(file, "r").use { raf ->
-                parseDngFileForColor(raf, file)
+                parseDngFileForColor(raf)
             }
         } catch (e: Exception) {
             Log.w(TAG, "extractColorBitmap(file) error: ${e.message}")
@@ -52,15 +53,20 @@ object DngColorExtractor {
     }
 
     /**
-     * Attempts to extract full-color sensor bitmap from DNG URI.
+     * Attempts to decode sensor data or a JPEG preview from a DNG URI.
      */
     fun extractColorBitmap(context: Context, uri: Uri): Bitmap? {
+        return extractWithSource(context, uri)?.bitmap
+    }
+
+    fun extractWithSource(context: Context, uri: Uri): ExtractedBitmap? {
         return try {
-            val stream = context.contentResolver.openInputStream(uri) ?: return null
             val tempFile = File.createTempFile("dng_extract_", ".tmp", context.cacheDir)
             try {
-                tempFile.outputStream().use { out -> stream.copyTo(out) }
-                extractColorBitmap(tempFile)
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    tempFile.outputStream().use { out -> stream.copyTo(out) }
+                } ?: return null
+                extractWithSource(tempFile)
             } finally {
                 tempFile.delete()
             }
@@ -71,7 +77,7 @@ object DngColorExtractor {
     }
 
     /**
-     * Attempts to extract full-color sensor bitmap from raw byte array.
+     * Attempts to decode sensor data or a JPEG preview from DNG bytes.
      */
     fun extractColorBitmap(bytes: ByteArray): Bitmap? {
         if (bytes.size < 16) return null
@@ -117,7 +123,7 @@ object DngColorExtractor {
         }
     }
 
-    private fun parseDngFileForColor(raf: RandomAccessFile, file: File): Bitmap? {
+    private fun parseDngFileForColor(raf: RandomAccessFile): ExtractedBitmap? {
         val fileLen = raf.length()
         if (fileLen < 16) return null
 
@@ -173,7 +179,7 @@ object DngColorExtractor {
                 val demosaiced = demosaicCfaFromRaf(raf, subInfo, fileLen)
                 if (demosaiced != null) {
                     Log.i(TAG, "Successfully demosaiced CFA sensor data from SubIFD at offset $subOffset (${demosaiced.width}x${demosaiced.height})")
-                    return demosaiced
+                    return ExtractedBitmap(demosaiced, isSensorData = true)
                 }
             }
 
@@ -195,7 +201,7 @@ object DngColorExtractor {
                     val bmp = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size, opts)
                     if (bmp != null && (bmp.width >= 600 || bmp.height >= 600)) {
                         Log.i(TAG, "Decoded high-res SubIFD preview (${bmp.width}x${bmp.height})")
-                        return bmp
+                        return ExtractedBitmap(bmp, isSensorData = false)
                     }
                 }
             }

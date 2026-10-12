@@ -50,6 +50,10 @@ class ZoomPanState(
 
     fun updateContainerSize(width: Float, height: Float) {
         if (width <= 0f || height <= 0f) return
+        if (width == containerWidth && height == containerHeight) return
+        animationJob?.cancel()
+        if (containerWidth > 0f) offsetX *= width / containerWidth
+        if (containerHeight > 0f) offsetY *= height / containerHeight
         containerWidth = width
         containerHeight = height
         clampOffsets()
