@@ -37,6 +37,13 @@ object SamplePhotos {
             badgeLabel = "RAW • DNG"
         ),
         SamplePhotoItem(
+            id = "raw_leica_bw_color",
+            title = "Leica M10 / Q2 RAW",
+            subtitle = "In-Camera B&W • True Color Restored",
+            iconDescription = "Leica camera RAW shot with B&W style recovered to full sensor chromatic spectrum",
+            badgeLabel = "LEICA RAW • RECOVERED"
+        ),
+        SamplePhotoItem(
             id = "golden_coastal",
             title = "Coastal Dusk",
             subtitle = "Golden hour skyline & ocean",
@@ -163,6 +170,7 @@ object SamplePhotos {
         when (sampleId) {
             "raw_sony_a7m3" -> renderSonyA7RawScene(canvas, width, height, paint)
             "raw_adobe_dng" -> renderAdobeDngScene(canvas, width, height, paint)
+            "raw_leica_bw_color" -> renderLeicaRecoveredScene(canvas, width, height, paint)
             "street_portrait" -> renderStreetShadows(canvas, width, height, paint)
             "vintage_cafe" -> renderVintageCafe(canvas, width, height, paint)
             else -> renderCoastalDusk(canvas, width, height, paint)
@@ -474,5 +482,73 @@ object SamplePhotos {
             Shader.TileMode.CLAMP
         )
         canvas.drawRect(w * 0.14f, h * 0.46f, w * 0.86f, h * 0.82f, paint)
+    }
+
+    private fun renderLeicaRecoveredScene(canvas: Canvas, w: Int, h: Int, paint: Paint) {
+        // High-fidelity Leica full sensor chromatic restoration scene
+        // Golden sunlight, rich Leica red signature, deep Mediterranean sky, olive foliage
+        val skyGrad = LinearGradient(
+            0f, 0f, 0f, h * 0.55f,
+            intArrayOf(
+                Color.rgb(28, 76, 142),   // Deep cobalt Mediterranean sky
+                Color.rgb(72, 136, 198),  // Rich Leica blue
+                Color.rgb(195, 215, 235), // Warm atmospheric horizon
+                Color.rgb(245, 215, 160)  // Golden hour edge
+            ),
+            floatArrayOf(0.0f, 0.45f, 0.85f, 1.0f),
+            Shader.TileMode.CLAMP
+        )
+        paint.shader = skyGrad
+        canvas.drawRect(0f, 0f, w.toFloat(), h * 0.55f, paint)
+
+        // Sun disc with optical flare
+        paint.shader = RadialGradient(
+            w * 0.72f, h * 0.28f, 260f,
+            intArrayOf(
+                Color.argb(255, 255, 250, 230),
+                Color.argb(160, 255, 200, 100),
+                Color.argb(0, 255, 160, 50)
+            ),
+            floatArrayOf(0.0f, 0.35f, 1.0f),
+            Shader.TileMode.CLAMP
+        )
+        canvas.drawCircle(w * 0.72f, h * 0.28f, 260f, paint)
+
+        // Terracotta rooftop architecture (Leica iconic micro-contrast & red tones)
+        paint.shader = null
+        paint.color = Color.rgb(192, 68, 46) // Warm terracotta red
+        val roofPath = Path().apply {
+            moveTo(w * 0.10f, h * 0.55f)
+            lineTo(w * 0.48f, h * 0.38f)
+            lineTo(w * 0.85f, h * 0.55f)
+            close()
+        }
+        canvas.drawPath(roofPath, paint)
+
+        // Building facade - warm stone
+        paint.color = Color.rgb(228, 214, 188)
+        canvas.drawRect(w * 0.18f, h * 0.55f, w * 0.80f, h.toFloat(), paint)
+
+        // Wooden shutters with rich umber / olive tones
+        paint.color = Color.rgb(65, 82, 58) // Olive green
+        canvas.drawRect(w * 0.28f, h * 0.62f, w * 0.40f, h * 0.82f, paint)
+        canvas.drawRect(w * 0.58f, h * 0.62f, w * 0.70f, h * 0.82f, paint)
+
+        // Leica Red accent detail (iconic red cafe awning/door sign)
+        paint.color = Color.rgb(218, 38, 32)
+        canvas.drawRect(w * 0.44f, h * 0.78f, w * 0.54f, h.toFloat(), paint)
+
+        // Foreground cobblestone with warm specular highlights
+        val streetGrad = LinearGradient(
+            0f, h * 0.85f, 0f, h.toFloat(),
+            intArrayOf(
+                Color.rgb(120, 110, 102),
+                Color.rgb(68, 62, 58)
+            ),
+            null,
+            Shader.TileMode.CLAMP
+        )
+        paint.shader = streetGrad
+        canvas.drawRect(0f, h * 0.88f, w.toFloat(), h.toFloat(), paint)
     }
 }

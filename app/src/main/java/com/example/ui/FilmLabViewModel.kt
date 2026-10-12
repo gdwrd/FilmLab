@@ -64,31 +64,45 @@ class FilmLabViewModel(application: Application) : AndroidViewModel(application)
         // App launches cleanly ready for the user's gallery photo or RAW files
     }
 
-    fun loadSample(sampleId: String) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(isProcessing = true, activeSampleId = sampleId) }
-            val rawSample = withContext(Dispatchers.Default) {
-                SamplePhotos.generateSampleBitmap(sampleId)
-            }
-            val metadata = SamplePhotos.getSampleMetadata(sampleId)
-            val normalized = withContext(Dispatchers.Default) {
-                FilmEngine.normalizeTo35mmResolution(rawSample)
-            }
-            _uiState.update {
-                it.copy(
-                    baseBitmap = normalized,
-                    imageWidth = normalized.width,
-                    imageHeight = normalized.height,
-                    rawMetadata = metadata,
-                    activeSampleId = sampleId
-                )
-            }
-            recomputeFilmEffect(normalized, _uiState.value.selectedPreset, _uiState.value.grainIntensity)
+    fun loadSampleSync(sampleId: String) {
+        val rawSample = SamplePhotos.generateSampleBitmap(sampleId)
+        val metadata = SamplePhotos.getSampleMetadata(sampleId)
+        val normalized = FilmEngine.normalizeTo35mmResolution(rawSample)
+        _uiState.update {
+            it.copy(
+                baseBitmap = normalized,
+                imageWidth = normalized.width,
+                imageHeight = normalized.height,
+                rawMetadata = metadata,
+                activeSampleId = sampleId,
+                isProcessing = false
+            )
         }
+        recomputeFilmEffect(normalized, _uiState.value.selectedPreset, _uiState.value.grainIntensity)
     }
 
-    fun onImagePicked(uri: Uri) {
-        viewModelScope.launch {
+    fun loadSample(sampleId: String): Job = viewModelScope.launch {
+        _uiState.update { it.copy(isProcessing = true, activeSampleId = sampleId) }
+        val rawSample = withContext(Dispatchers.Default) {
+            SamplePhotos.generateSampleBitmap(sampleId)
+        }
+        val metadata = SamplePhotos.getSampleMetadata(sampleId)
+        val normalized = withContext(Dispatchers.Default) {
+            FilmEngine.normalizeTo35mmResolution(rawSample)
+        }
+        _uiState.update {
+            it.copy(
+                baseBitmap = normalized,
+                imageWidth = normalized.width,
+                imageHeight = normalized.height,
+                rawMetadata = metadata,
+                activeSampleId = sampleId
+            )
+        }
+        recomputeFilmEffect(normalized, _uiState.value.selectedPreset, _uiState.value.grainIntensity)
+    }
+
+    fun onImagePicked(uri: Uri): Job = viewModelScope.launch {
             _uiState.update { it.copy(isProcessing = true, activeSampleId = null) }
             try {
                 val context = getApplication<Application>()
@@ -116,7 +130,6 @@ class FilmLabViewModel(application: Application) : AndroidViewModel(application)
                 }
             }
         }
-    }
 
     fun selectPreset(preset: FilmPreset) {
         if (_uiState.value.selectedPreset == preset && _uiState.value.filmFullBitmap != null) {

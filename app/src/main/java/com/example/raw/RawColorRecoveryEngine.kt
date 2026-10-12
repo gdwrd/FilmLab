@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
 import android.util.Log
+import java.io.File
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -59,7 +60,8 @@ object RawColorRecoveryEngine {
      */
     fun recoverRealColors(
         context: Context,
-        uri: Uri,
+        uri: Uri? = null,
+        file: File? = null,
         decodedBitmap: Bitmap,
         metadata: RawMetadata
     ): Pair<Bitmap, Boolean> {
@@ -73,7 +75,11 @@ object RawColorRecoveryEngine {
         // Phase 1: Direct CFA Demosaic from DNG file bytes (recovers raw Bayer photodiode colors)
         if (metadata.format == RawFormat.DNG) {
             try {
-                val cfaColorBitmap = DngColorExtractor.extractColorBitmap(context, uri)
+                val cfaColorBitmap = when {
+                    file != null -> DngColorExtractor.extractColorBitmap(file)
+                    uri != null -> DngColorExtractor.extractColorBitmap(context, uri)
+                    else -> null
+                }
                 if (cfaColorBitmap != null && !isMonochrome(cfaColorBitmap)) {
                     Log.i(TAG, "Successfully extracted original sensor Bayer CFA color data from DNG.")
                     return Pair(cfaColorBitmap, true)
@@ -89,6 +95,13 @@ object RawColorRecoveryEngine {
         val recovered = reconstructRealChromaticSpectrum(decodedBitmap, metadata)
         return Pair(recovered, true)
     }
+
+    fun recoverRealColors(
+        context: Context,
+        uri: Uri,
+        decodedBitmap: Bitmap,
+        metadata: RawMetadata
+    ): Pair<Bitmap, Boolean> = recoverRealColors(context, uri, null, decodedBitmap, metadata)
 
     /**
      * Reconstructs natural photographic chromatic spectrum from sensor luminance data.

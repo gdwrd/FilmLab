@@ -360,13 +360,11 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun testViewModelLoadSampleRawSetsMetadata() = runBlocking {
+  fun testViewModelLoadSampleRawSetsMetadata() {
     val application = ApplicationProvider.getApplicationContext<android.app.Application>()
     val viewModel = com.example.ui.FilmLabViewModel(application)
 
-    viewModel.loadSample("raw_sony_a7m3")
-    // Allow coroutine execution
-    kotlinx.coroutines.delay(100)
+    viewModel.loadSampleSync("raw_sony_a7m3")
 
     val state = viewModel.uiState.value
     assertNotNull(state.baseBitmap)
@@ -456,5 +454,44 @@ class ExampleRobolectricTest {
 
     assertFalse("Should not trigger recovery if already in color", recovered)
     assertEquals(colorBitmap, result)
+  }
+
+  @Test
+  fun testLargestEmbeddedJpegExtractionRejectsThumbnail() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val tempFile = java.io.File.createTempFile("mock_raw_", ".arw", context.cacheDir)
+    try {
+      // 1. Generate small 160x120 thumbnail JPEG
+      val thumbBitmap = Bitmap.createBitmap(160, 120, Bitmap.Config.ARGB_8888)
+      thumbBitmap.eraseColor(Color.DKGRAY)
+      val thumbOut = java.io.ByteArrayOutputStream()
+      thumbBitmap.compress(Bitmap.CompressFormat.JPEG, 75, thumbOut)
+      val thumbBytes = thumbOut.toByteArray()
+
+      // 2. Generate large 800x600 master preview JPEG
+      val masterBitmap = Bitmap.createBitmap(800, 600, Bitmap.Config.ARGB_8888)
+      masterBitmap.eraseColor(Color.rgb(40, 120, 200))
+      val masterOut = java.io.ByteArrayOutputStream()
+      masterBitmap.compress(Bitmap.CompressFormat.JPEG, 85, masterOut)
+      val masterBytes = masterOut.toByteArray()
+
+      // 3. Write mock RAW container with header, thumbnail first, then high-res preview
+      tempFile.outputStream().use { out ->
+        // Dummy TIFF header
+        out.write(byteArrayOf(0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00))
+        out.write(ByteArray(2048)) // Padding
+        out.write(thumbBytes)      // First SOI: thumbnail (160x120)
+        out.write(ByteArray(4096)) // Padding between streams
+        out.write(masterBytes)     // Second SOI: high-res preview (800x600)
+      }
+
+      val extracted = com.example.raw.RawImageDecoder.extractLargestEmbeddedJpeg(tempFile)
+      assertNotNull("Should extract large embedded preview", extracted)
+      assertTrue("Must reject 160x120 thumbnail and extract >= 600px master image", extracted!!.width >= 600 || extracted.height >= 600)
+      assertEquals(800, extracted.width)
+      assertEquals(600, extracted.height)
+    } finally {
+      tempFile.delete()
+    }
   }
 }
