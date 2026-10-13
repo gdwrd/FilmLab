@@ -5,6 +5,8 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.view.WindowManager
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -64,7 +66,10 @@ class FilmLabJourneyTest {
             compose.onNodeWithTag("photo_info_button").performScrollTo().performClick()
             screenshot("info")
             compose.onNodeWithText("Done").performScrollTo().performClick()
-            compose.onNodeWithTag("save_button").performClick()
+            compose.onNodeWithTag("save_button").assertIsEnabled().performClick()
+            compose.waitUntil(15_000) {
+                compose.onAllNodesWithTag("export_save_button").fetchSemanticsNodes().size == 1
+            }
             compose.onNodeWithTag("export_save_button").performScrollTo().performClick()
             compose.waitUntil(15_000) { viewModel.uiState.value.saveStatus is SaveStatus.Success || viewModel.uiState.value.saveStatus is SaveStatus.Error }
             val result = viewModel.uiState.value.saveStatus

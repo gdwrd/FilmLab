@@ -10,9 +10,11 @@ import android.net.Uri
 import android.view.WindowManager
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -201,7 +203,10 @@ class NextEditorDeviceTest {
         instrumentation.addMonitor(monitor)
         var sharedFile: File? = null
         try {
-            compose.onNodeWithTag("save_button").performClick()
+            compose.onNodeWithTag("save_button").assertIsEnabled().performClick()
+            compose.waitUntil(15_000) {
+                compose.onAllNodesWithTag("export_share_button").fetchSemanticsNodes().size == 1
+            }
             compose.onNodeWithTag("export_share_button").performScrollTo().performClick()
             compose.waitUntil(30_000) { dispatched.get() != null }
             val chooser = dispatched.get()
