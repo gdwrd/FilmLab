@@ -49,9 +49,17 @@ Requirements: JDK 21 and Android SDK platform 36.1 / build tools 36.0.0. The che
     ./gradlew :app:assembleDebug
     ./gradlew :app:testDebugUnitTest
 
-Debug builds install as **FilmLab Preview**, package **com.aistudio.filmlab.vntg64.debug**, using the standard Android debug key. They can coexist with the release app.
+Release builds use **com.nsheremet.filmlab**. Debug builds install as **FilmLab Preview**, package **com.nsheremet.filmlab.debug**, using the standard Android debug key. They can coexist with the release app. These IDs install separately from older FilmLab builds; private edits and preferences remain in the older installation.
 
 Release signing uses KEYSTORE_PATH, STORE_PASSWORD, and KEY_PASSWORD environment variables. Do not commit signing keys or secrets.
+
+## GitHub builds and releases
+
+Every push to `main` builds the preview APK, runs unit tests and lint, and runs the Android tests on an API 36 emulator. APKs and test reports are available in the workflow's artifacts for 14 days.
+
+To publish, update `versionName` and increase `versionCode` in `app/build.gradle.kts`, commit, and push a matching annotated tag such as `v1.0.1`. The tag workflow repeats the checks, builds and verifies the signed release APK, and publishes a GitHub release with the APK and its SHA-256 checksum. A version mismatch or failed check prevents publication. Published releases are never overwritten; rerunning can complete an interrupted draft.
+
+The repository's Actions secrets are `KEYSTORE_BASE64` (base64-encoded JKS, alias `upload`), `STORE_PASSWORD`, and `KEY_PASSWORD`. The release workflow also verifies the public certificate fingerprint. Preserve the signing key and passwords in a secure backup: future APK updates must use the same key. Signing material is never uploaded as a build artifact.
 
 Tests cover film processing and tiled effects, exposure and warmth, crop geometry and EXIF, source retention and draft migration, recipes and deletion undo, interrupted writes and exports, native sharing, and Compose editing journeys. Device tests additionally exercise Android's real region decoder. Robolectric's region-decoder shadow returns empty pixels, so pixel-level renderer unit tests use a test-only native BitmapFactory-backed region shadow.
 

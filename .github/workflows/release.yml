@@ -1,0 +1,97 @@
+name: Publish release
+
+on:
+  push:
+    tags: ['*']
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    uses: ./.github/workflows/ci.yml
+  publish:
+    needs: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-read-only: true
+      - name: Validate version tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Use a vX.Y.Z version tag.' >&2; exit 1; }
+      - name: Install Android SDK
+        run: sdkmanager 'platforms;android-36.1' 'build-tools;36.0.0'
+      - name: Build and verify signed APK
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          RELEASE_CERT_SHA256: c82f4478e44be1916f7ae1910071ad07dc052af4833a2e53d721a5cc02875ec2
+        run: |
+          test -n "$KEYSTORE_BASE64" && test -n "$STORE_PASSWORD" && test -n "$KEY_PASSWORD"
+          umask 077
+          export KEYSTORE_PATH="$RUNNER_TEMP/filmlab-release.jks"
+          trap 'rm -f "$KEYSTORE_PATH"' EXIT
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          ./gradlew --no-daemon --console=plain --no-configuration-cache :app:assembleRelease :app:lintRelease
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk | tee "$RUNNER_TEMP/apk-signature.txt"
+          grep -F "Signer #1 certificate SHA-256 digest: $RELEASE_CERT_SHA256" "$RUNNER_TEMP/apk-signature.txt"
+      - name: Verify package and prepare release files
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import json, os, shutil
+          from pathlib import Path
+          tag = os.environ['RELEASE_TAG']
+          output = Path('app/build/outputs/apk/release')
+          metadata = json.loads((output / 'output-metadata.json').read_text())
+          assert metadata['applicationId'] == 'com.nsheremet.filmlab', metadata
+          assert len(metadata['elements']) == 1, metadata
+          apk = metadata['elements'][0]
+          assert apk['versionName'] == tag[1:], 'Tag must match the app versionName.'
+          assert apk['versionCode'] > 0, 'versionCode must be positive.'
+          Path('release').mkdir()
+          shutil.copyfile(output / apk['outputFile'], f'release/FilmLab-{tag}.apk')
+          PY
+          cd release
+          sha256sum "FilmLab-${RELEASE_TAG}.apk" > "FilmLab-${RELEASE_TAG}.apk.sha256"
+      - name: Create draft and publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" --json isDraft > "$RUNNER_TEMP/release.json"; then
+            jq -e '.isDraft == true' "$RUNNER_TEMP/release.json"
+            gh release upload "$RELEASE_TAG" release/* --clobber
+          else
+            gh release create "$RELEASE_TAG" release/* --verify-tag --draft --title "FilmLab $RELEASE_TAG" --generate-notes
+          fi
+          gh release view "$RELEASE_TAG" --json assets --jq '.assets[] | [.name, .size] | @tsv' > "$RUNNER_TEMP/release-assets.tsv"
+          test "$(wc -l < "$RUNNER_TEMP/release-assets.tsv")" -eq 2
+          while IFS=$'\t' read -r asset bytes; do
+            test "$(stat -c %s "release/$asset")" -eq "$bytes"
+          done < "$RUNNER_TEMP/release-assets.tsv"
+          gh release edit "$RELEASE_TAG" --draft=false
