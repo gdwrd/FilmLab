@@ -1,42 +1,51 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Outer film canister body (centered within 66dp safe area: X:26 to 82, Y:26 to 82) -->
-    <!-- Film canister top spindle -->
-    <path
-        android:fillColor="#8C8885"
-        android:pathData="M50,25h8v4h-8z" />
-    <!-- Film canister body -->
-    <path
-        android:fillColor="#211E1D"
-        android:strokeColor="#5E5854"
-        android:strokeWidth="1.5"
-        android:pathData="M34,29h40c2.2,0 4,1.8 4,4v42c0,2.2 -1.8,4 -4,4h-40c-2.2,0 -4,-1.8 -4,-4v-42c0,-2.2 1.8,-4 4,-4z" />
-    <!-- Kodachrome iconic warm gold & red film label stripe -->
-    <path
-        android:fillColor="#E5A93C"
-        android:pathData="M34,36h40v18h-40z" />
-    <path
-        android:fillColor="#D32F2F"
-        android:pathData="M34,54h40v6h-40z" />
-    <!-- Film strip leader extending to the right -->
-    <path
-        android:fillColor="#1E1E1E"
-        android:strokeColor="#7E7771"
-        android:strokeWidth="1.2"
-        android:pathData="M74,42h11c1.5,0 3,1.2 3,2.8v16.4c0,1.6 -1.5,2.8 -3,2.8h-11z" />
-    <!-- Film sprocket perforations -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M77,44h3v4h-3z M83,44h3v4h-3z M77,56h3v4h-3z M83,56h3v4h-3z" />
-    <!-- "64" / Analog circle badge in center of canister -->
-    <path
-        android:fillColor="#1A1817"
-        android:pathData="M54,45m-7,0a7,7 0,1 1,14 0a7,7 0,1 1,-14 0" />
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M54,45m-3,0a3,3 0,1 1,6 0a3,3 0,1 1,-6 0" />
+    <group android:scaleX="0.30" android:scaleY="0.30"
+        android:translateX="15.6" android:translateY="15.6">
+        <group android:translateY="8">
+            <path android:fillColor="#06354339" android:strokeColor="#03354339"
+                android:strokeWidth="14" android:strokeLineJoin="round"
+                android:pathData="M95.59,48.65 L188.52,68.41 C196.08,70.01 200.91,77.45 199.30,85.01 L176.01,194.56 C174.41,202.13 166.97,206.95 159.41,205.35 L66.48,185.59 C58.92,183.99 54.09,176.55 55.70,168.99 L78.99,59.44 C80.59,51.87 88.03,47.05 95.59,48.65 Z M62.72,69.29 L156.80,56.07 C164.45,54.99 171.53,60.33 172.61,67.99 L188.20,178.90 C189.27,186.55 183.94,193.63 176.28,194.71 L82.20,207.93 C74.55,209.01 67.47,203.67 66.39,196.01 L50.80,85.10 C49.73,77.45 55.06,70.37 62.72,69.29 Z" />
+            <path android:fillColor="#0C354339" android:strokeColor="#08354339"
+                android:strokeWidth="8" android:strokeLineJoin="round"
+                android:pathData="M95.59,48.65 L188.52,68.41 C196.08,70.01 200.91,77.45 199.30,85.01 L176.01,194.56 C174.41,202.13 166.97,206.95 159.41,205.35 L66.48,185.59 C58.92,183.99 54.09,176.55 55.70,168.99 L78.99,59.44 C80.59,51.87 88.03,47.05 95.59,48.65 Z M62.72,69.29 L156.80,56.07 C164.45,54.99 171.53,60.33 172.61,67.99 L188.20,178.90 C189.27,186.55 183.94,193.63 176.28,194.71 L82.20,207.93 C74.55,209.01 67.47,203.67 66.39,196.01 L50.80,85.10 C49.73,77.45 55.06,70.37 62.72,69.29 Z" />
+            <path android:fillColor="#17354339" android:strokeColor="#0D354339"
+                android:strokeWidth="2" android:strokeLineJoin="round"
+                android:pathData="M95.59,48.65 L188.52,68.41 C196.08,70.01 200.91,77.45 199.30,85.01 L176.01,194.56 C174.41,202.13 166.97,206.95 159.41,205.35 L66.48,185.59 C58.92,183.99 54.09,176.55 55.70,168.99 L78.99,59.44 C80.59,51.87 88.03,47.05 95.59,48.65 Z M62.72,69.29 L156.80,56.07 C164.45,54.99 171.53,60.33 172.61,67.99 L188.20,178.90 C189.27,186.55 183.94,193.63 176.28,194.71 L82.20,207.93 C74.55,209.01 67.47,203.67 66.39,196.01 L50.80,85.10 C49.73,77.45 55.06,70.37 62.72,69.29 Z" />
+        </group>
+        <group android:rotation="12" android:pivotX="127.5" android:pivotY="127">
+            <path android:fillColor="#C8C9BF" android:pathData="M80.00,57.00 L175.00,57.00 C182.73,57.00 189.00,63.27 189.00,71.00 L189.00,183.00 C189.00,190.73 182.73,197.00 175.00,197.00 L80.00,197.00 C72.27,197.00 66.00,190.73 66.00,183.00 L66.00,71.00 C66.00,63.27 72.27,57.00 80.00,57.00 Z" />
+        </group>
+        <group android:rotation="-8" android:pivotX="119.5" android:pivotY="132">
+            <path android:pathData="M72.00,62.00 L167.00,62.00 C174.73,62.00 181.00,68.27 181.00,76.00 L181.00,188.00 C181.00,195.73 174.73,202.00 167.00,202.00 L72.00,202.00 C64.27,202.00 58.00,195.73 58.00,188.00 L58.00,76.00 C58.00,68.27 64.27,62.00 72.00,62.00 Z">
+                <aapt:attr name="android:fillColor">
+                    <gradient android:type="linear"
+                        android:startX="58" android:startY="62" android:endX="144.1" android:endY="202">
+                        <item android:color="#FFFEF8" android:offset="0" />
+                        <item android:color="#E6E4D9" android:offset="1" />
+                    </gradient>
+                </aapt:attr>
+            </path>
+            <path android:pathData="M76.00,73.00 L163.00,73.00 C166.87,73.00 170.00,76.13 170.00,80.00 L170.00,170.00 C170.00,173.87 166.87,177.00 163.00,177.00 L76.00,177.00 C72.13,177.00 69.00,173.87 69.00,170.00 L69.00,80.00 C69.00,76.13 72.13,73.00 76.00,73.00 Z">
+                <aapt:attr name="android:fillColor">
+                    <gradient android:type="linear"
+                        android:startX="69" android:startY="73" android:endX="139.7" android:endY="177">
+                        <item android:color="#9BB9BD" android:offset="0" />
+                        <item android:color="#C9CEC0" android:offset="0.4" />
+                        <item android:color="#F0C38C" android:offset="0.7" />
+                        <item android:color="#C78156" android:offset="1" />
+                    </gradient>
+                </aapt:attr>
+            </path>
+            <path android:fillColor="#33514F40"
+                android:pathData="M69,151 Q107,114 170,149 V170 Q170,177 163,177 H76 Q69,177 69,170 Z" />
+            <path android:strokeColor="#B7B4A7" android:strokeWidth="3"
+                android:strokeLineCap="round" android:pathData="M104,189 H135" />
+        </group>
+    </group>
 </vector>

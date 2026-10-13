@@ -1,8 +1,18 @@
-# FilmLab
+<p align="center">
+  <img src="assets/logo.png" alt="FilmLab Print Stack logo" width="112">
+</p>
 
-A focused Android photo editor with ten film-inspired looks.
+<h1 align="center">FilmLab</h1>
+
+<p align="center">A focused Android photo editor with ten film-inspired looks.</p>
 
 Choose a photo, preview the films on your own image, adjust the strength, and save a copy. Processing happens on your device. FilmLab never replaces your original photograph.
+
+<p align="center">
+  <img src="assets/screenshot.png" alt="FilmLab editor on a Pixel 9 Pro Fold, showing a café photograph and film previews" width="360">
+</p>
+
+<p align="center"><sub>Captured from FilmLab running on a Pixel 9 Pro Fold.</sub></p>
 
 ## Editing a photo
 
