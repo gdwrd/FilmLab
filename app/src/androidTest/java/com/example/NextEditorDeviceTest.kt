@@ -202,6 +202,7 @@ class NextEditorDeviceTest {
         }
         instrumentation.addMonitor(monitor)
         var sharedFile: File? = null
+        var chooserVisible = false
         try {
             compose.onNodeWithTag("save_button").assertIsEnabled().performClick()
             compose.waitUntil(15_000) {
@@ -230,10 +231,16 @@ class NextEditorDeviceTest {
                 val packageName = instrumentation.uiAutomation.rootInActiveWindow?.packageName?.toString().orEmpty()
                 packageName.contains("intentresolver") || packageName.contains("systemui")
             }
+            chooserVisible = true
             screenshot("next-native-share", waitForCompose = false)
         } finally {
             instrumentation.removeMonitor(monitor)
-            instrumentation.uiAutomation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+            if (chooserVisible) {
+                assertTrue(instrumentation.uiAutomation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK))
+                compose.waitUntil(15_000) {
+                    instrumentation.uiAutomation.rootInActiveWindow?.packageName?.toString() == context.packageName
+                }
+            }
             sharedFile?.delete()
         }
     }
