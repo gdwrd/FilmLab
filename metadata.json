@@ -1,6 +1,6 @@
 {
   "name": "FilmLab",
-  "description": "A focused Android photo editor with seven film-inspired looks, visual film previews, strength and grain controls, original comparison, a recoverable current edit, and JPEG copies. RAW support varies by camera encoding and may use an embedded preview. Adapts to phones and foldables with light and dark themes.",
+  "description": "A focused Android photo editor with ten film-inspired looks, exposure, warmth, grain and glow controls, crop and straighten, undo/redo, favourites and saved looks, private recent edits, source-resolution JPEG copies and native sharing. RAW support uses available previews or Android decoding. Adapts to phones and foldables with light and dark themes.",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

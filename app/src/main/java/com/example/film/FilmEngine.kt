@@ -1,6 +1,9 @@
 package com.example.film
 
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Rect
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -9,19 +12,17 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.floor
+import kotlin.math.roundToInt
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.sin
 
 object FilmEngine {
 
-    /**
-     * Standard 35mm optical lab scan resolution (long edge).
-     * At 2048px, a single pixel represents ~17.5 micrometers of a 36mm film frame,
-     * ensuring that physical grain clump simulation is resolution-consistent
-     * whether the original photo was shot on a 12MP or 200MP sensor.
-     */
+    /** Editing preview size; export scales texture and glow to retain the same appearance. */
     const val TARGET_LONG_EDGE = 2048
+    const val PHOTO_MATTE_COLOR = 0xFF111112.toInt()
 
     // Pre-computed lookup tables for instantaneous, artifact-free tone transformations
     private val kodachromeRedLut = IntArray(256)
@@ -43,6 +44,12 @@ object FilmEngine {
     private val pro400hRedLut = IntArray(256)
     private val pro400hGreenLut = IntArray(256)
     private val pro400hBlueLut = IntArray(256)
+
+    private val goldRedLut = IntArray(256)
+    private val goldGreenLut = IntArray(256)
+    private val goldBlueLut = IntArray(256)
+    private val ektachromeToneLut = IntArray(256)
+    private val deltaToneLut = IntArray(256)
 
     private val hp5ToneLut = IntArray(256)
     private val triXToneLut = IntArray(256)
@@ -163,12 +170,22 @@ object FilmEngine {
                 0.50 + 0.50 * ((x - 0.50) / 0.50).pow(0.82)
             }.coerceIn(0.0, 1.0)
             triXToneLut[i] = (triXCurve * 255.0).toInt().coerceIn(0, 255)
+
+            // Artistic interpretations: warm everyday colour, neutral slides and fine monochrome.
+            val goldBase = 0.015 + 0.985 * x.pow(1.04)
+            goldRedLut[i] = ((goldBase + 0.040 * sin(x * Math.PI)) * 255).roundToInt().coerceIn(0, 255)
+            goldGreenLut[i] = ((goldBase + 0.012 * sin(x * Math.PI)) * 255).roundToInt().coerceIn(0, 255)
+            goldBlueLut[i] = ((goldBase - 0.030 * sin(x * Math.PI)) * 255).roundToInt().coerceIn(0, 255)
+            val slideCurve = if (x < .5) .5 * (2 * x).pow(1.18) else 1 - .5 * (2 * (1 - x)).pow(1.18)
+            ektachromeToneLut[i] = (slideCurve * 255).roundToInt().coerceIn(0, 255)
+            val deltaCurve = if (x < .5) .5 * (2 * x).pow(1.12) else 1 - .5 * (2 * (1 - x)).pow(1.12)
+            deltaToneLut[i] = (deltaCurve * 255).roundToInt().coerceIn(0, 255)
         }
     }
 
     /**
      * Limits the long edge to the calibrated 2048px working resolution without enlarging small photos,
-     * preserving the original aspect ratio.
+     * preserving the original aspect ratio and flattening transparency for JPEG output.
      */
     fun normalizeTo35mmResolution(source: Bitmap): Bitmap {
         val srcWidth = source.width
@@ -176,11 +193,17 @@ object FilmEngine {
 
         val (targetWidth, targetHeight) = calculate35mmDimensions(srcWidth, srcHeight)
 
-        if (srcWidth == targetWidth && srcHeight == targetHeight) {
-            return source
+        if (!source.hasAlpha()) {
+            if (srcWidth == targetWidth && srcHeight == targetHeight) return source
+            return Bitmap.createScaledBitmap(source, targetWidth, targetHeight, true)
         }
 
-        return Bitmap.createScaledBitmap(source, targetWidth, targetHeight, true)
+        // A single opaque matte keeps preview and JPEG blending identical at every strength.
+        return Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888).apply {
+            eraseColor(PHOTO_MATTE_COLOR)
+            Canvas(this).drawBitmap(source, null, Rect(0, 0, targetWidth, targetHeight), Paint(Paint.FILTER_BITMAP_FLAG))
+            setHasAlpha(false)
+        }
     }
 
     fun calculate35mmDimensions(width: Int, height: Int): Pair<Int, Int> {
@@ -195,156 +218,153 @@ object FilmEngine {
         }
     }
 
-    /**
-     * Applies the chosen film preset and intensity to a standardized 2048px bitmap.
-     * Multithreaded execution across CPU cores for maximum performance.
-     * [grainIntensity] modulates the physical grain physics (0.0 = clean/no grain, 1.0 = calibrated default, >1.0 = pushed grain).
-     */
+    /** Exposure is applied in linear light before the film's tone curve. */
+    suspend fun applyAdjustments(bitmap: Bitmap, exposure: Float = 0f, warmth: Float = 0f): Bitmap = withContext(Dispatchers.Default) {
+        val ev = (exposure.takeIf(Float::isFinite) ?: 0f).coerceIn(-2f, 2f)
+        val balance = (warmth.takeIf(Float::isFinite) ?: 0f).coerceIn(-1f, 1f)
+        if (ev == 0f && balance == 0f) return@withContext bitmap
+        val red = adjustmentLut(2.0.pow(ev + balance * .35))
+        val green = adjustmentLut(2.0.pow(ev.toDouble()))
+        val blue = adjustmentLut(2.0.pow(ev - balance * .35))
+        val pixels = IntArray(bitmap.width * bitmap.height)
+        bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+        for (y in 0 until bitmap.height) {
+            currentCoroutineContext().ensureActive()
+            for (x in 0 until bitmap.width) {
+                val index = y * bitmap.width + x
+                val pixel = pixels[index]
+                pixels[index] = (pixel and -0x1000000) or
+                    (red[(pixel ushr 16) and 255] shl 16) or
+                    (green[(pixel ushr 8) and 255] shl 8) or blue[pixel and 255]
+            }
+        }
+        Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888).apply {
+            setPixels(pixels, 0, width, 0, 0, width, height)
+            setHasAlpha(bitmap.hasAlpha())
+        }
+    }
+
+    private fun adjustmentLut(multiplier: Double) = IntArray(256) { value ->
+        val srgb = value / 255.0
+        val linear = (if (srgb <= .04045) srgb / 12.92 else ((srgb + .055) / 1.055).pow(2.4)) * multiplier
+        val result = if (linear <= .0031308) linear * 12.92 else 1.055 * linear.pow(1 / 2.4) - .055
+        (result * 255).roundToInt().coerceIn(0, 255)
+    }
+
+    fun tileAlignment(resolutionScale: Float = 1f): Int {
+        require(resolutionScale.isFinite() && resolutionScale > 0) { "Photo scale must be positive" }
+        return (4 * resolutionScale.coerceAtLeast(1f)).roundToInt().coerceAtLeast(1)
+    }
+
+    /** Two neighbouring highlight cells plus a full partial cell keep tile edges invisible. */
+    fun requiredHalo(preset: FilmPreset, glowIntensity: Float = 1f, resolutionScale: Float = 1f): Int =
+        if (preset == FilmPreset.CINESTILL_800T && (glowIntensity.takeIf(Float::isFinite) ?: 1f) > 0f) 3 * tileAlignment(resolutionScale) else 0
+
+    private data class Coordinates(val originX: Int, val originY: Int, val scale: Float) {
+        fun x(value: Int) = floor((originX.toDouble() + value) / scale).toInt()
+        fun y(value: Int) = floor((originY.toDouble() + value) / scale).toInt()
+    }
+
+    private fun grainHash(x: Int, y: Int, salt: Int): Int {
+        var value = x * 374761393 + y * 668265263 + salt
+        value = (value xor (value ushr 13)) * 1274126177
+        return value xor (value ushr 16)
+    }
+
+    /** The global coordinates keep grain and highlight glow continuous across export tiles. */
     suspend fun applyFilmFilter(
         baseBitmap: Bitmap,
         preset: FilmPreset,
         intensity: Float = 1.0f,
-        grainIntensity: Float = 1.0f
+        grainIntensity: Float = 1.0f,
+        glowIntensity: Float = 1.0f,
+        originX: Int = 0,
+        originY: Int = 0,
+        resolutionScale: Float = 1.0f
     ): Bitmap = withContext(Dispatchers.Default) {
-        if (preset == FilmPreset.ORIGINAL || intensity <= 0.001f) {
-            return@withContext baseBitmap.copy(Bitmap.Config.ARGB_8888, false)
-        }
-
+        require(resolutionScale.isFinite() && resolutionScale > 0) { "Photo scale must be positive" }
+        val clampedIntensity = (intensity.takeIf(Float::isFinite) ?: 1f).coerceIn(0f, 1f)
+        if (preset == FilmPreset.ORIGINAL || clampedIntensity <= 0f) return@withContext baseBitmap
+        val clampedGrainIntensity = (grainIntensity.takeIf(Float::isFinite) ?: 1f).coerceIn(0f, 3f)
+        val clampedGlow = (glowIntensity.takeIf(Float::isFinite) ?: 1f).coerceIn(0f, 1f)
+        val coordinates = Coordinates(originX, originY, resolutionScale.coerceAtLeast(1f))
         val width = baseBitmap.width
         val height = baseBitmap.height
-        val outputBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-
-        // Read source pixels into buffer
         val srcPixels = IntArray(width * height)
         baseBitmap.getPixels(srcPixels, 0, width, 0, 0, width, height)
         val dstPixels = IntArray(width * height)
-
-        val clampedIntensity = intensity.coerceIn(0f, 1f)
-        val clampedGrainIntensity = grainIntensity.coerceIn(0f, 3f)
-
-        // For CineStill 800T: Compute the authentic optical highlight halation bloom map
-        val halationMap = if (preset == FilmPreset.CINESTILL_800T) {
-            computeHalationBloomMap(srcPixels, width, height)
-        } else {
-            null
-        }
-
-        val numCores = Runtime.getRuntime().availableProcessors().coerceAtLeast(2)
+        val halation = if (preset == FilmPreset.CINESTILL_800T && clampedGlow > 0) {
+            computeHalationBloomMap(srcPixels, width, height, originX, originY, tileAlignment(resolutionScale))
+        } else null
+        val numCores = Runtime.getRuntime().availableProcessors().coerceIn(2, height.coerceAtLeast(2))
         val chunkHeight = (height + numCores - 1) / numCores
-
-        // Parallel processing of scanline chunks
-        val deferreds = (0 until numCores).map { coreIndex ->
+        (0 until numCores).map { coreIndex ->
             async {
                 val startY = coreIndex * chunkHeight
                 val endY = min(height, startY + chunkHeight)
                 if (startY < endY) {
                     when (preset) {
-                        FilmPreset.KODACHROME_64 -> processKodachromeChunk(
-                            srcPixels, dstPixels, width, startY, endY, clampedIntensity, clampedGrainIntensity
-                        )
-                        FilmPreset.PORTRA_400 -> processPortraChunk(
-                            srcPixels, dstPixels, width, startY, endY, clampedIntensity, clampedGrainIntensity
-                        )
-                        FilmPreset.FUJI_VELVIA_50 -> processVelviaChunk(
-                            srcPixels, dstPixels, width, startY, endY, clampedIntensity, clampedGrainIntensity
-                        )
-                        FilmPreset.CINESTILL_800T -> processCineStillChunk(
-                            srcPixels, dstPixels, width, startY, endY, clampedIntensity,
-                            halationMap ?: FloatArray(0), (width + 3) / 4, clampedGrainIntensity
-                        )
-                        FilmPreset.FUJI_PRO_400H -> processPro400hChunk(
-                            srcPixels, dstPixels, width, startY, endY, clampedIntensity, clampedGrainIntensity
-                        )
-                        FilmPreset.ILFORD_HP5 -> processIlfordHp5Chunk(
-                            srcPixels, dstPixels, width, startY, endY, clampedIntensity, clampedGrainIntensity
-                        )
-                        FilmPreset.KODAK_TRI_X -> processTriXChunk(
-                            srcPixels, dstPixels, width, startY, endY, clampedIntensity, clampedGrainIntensity
-                        )
-                        FilmPreset.ORIGINAL -> {
-                            System.arraycopy(
-                                srcPixels, startY * width,
-                                dstPixels, startY * width,
-                                (endY - startY) * width
-                            )
-                        }
+                        FilmPreset.KODACHROME_64 -> processKodachromeChunk(srcPixels, dstPixels, width, startY, endY, clampedIntensity, clampedGrainIntensity, coordinates)
+                        FilmPreset.PORTRA_400 -> processPortraChunk(srcPixels, dstPixels, width, startY, endY, clampedIntensity, clampedGrainIntensity, coordinates)
+                        FilmPreset.FUJI_VELVIA_50 -> processVelviaChunk(srcPixels, dstPixels, width, startY, endY, clampedIntensity, clampedGrainIntensity, coordinates)
+                        FilmPreset.CINESTILL_800T -> processCineStillChunk(srcPixels, dstPixels, width, startY, endY, clampedIntensity, halation, clampedGrainIntensity, clampedGlow, coordinates)
+                        FilmPreset.FUJI_PRO_400H -> processPro400hChunk(srcPixels, dstPixels, width, startY, endY, clampedIntensity, clampedGrainIntensity, coordinates)
+                        FilmPreset.ILFORD_HP5 -> processIlfordHp5Chunk(srcPixels, dstPixels, width, startY, endY, clampedIntensity, clampedGrainIntensity, coordinates)
+                        FilmPreset.KODAK_TRI_X -> processTriXChunk(srcPixels, dstPixels, width, startY, endY, clampedIntensity, clampedGrainIntensity, coordinates)
+                        FilmPreset.GOLD_200, FilmPreset.ILFORD_DELTA_100, FilmPreset.EKTACHROME_E100 -> processNewFilmChunk(srcPixels, dstPixels, width, startY, endY, clampedIntensity, clampedGrainIntensity, coordinates, preset)
+                        FilmPreset.ORIGINAL -> Unit
                     }
                 }
             }
+        }.awaitAll()
+        Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).apply {
+            setPixels(dstPixels, 0, width, 0, 0, width, height)
+            setHasAlpha(baseBitmap.hasAlpha())
         }
-
-        deferreds.awaitAll()
-
-        outputBitmap.setPixels(dstPixels, 0, width, 0, 0, width, height)
-        return@withContext outputBitmap
     }
 
-    /**
-     * Optical Halation Bloom generator for CineStill 800T:
-     * Downsamples specular highlights (L > 215) to 1/4 scale, executes a fast 2-pass
-     * separable diffusion blur, and produces a normalized red halation intensity map.
-     */
-    private fun computeHalationBloomMap(src: IntArray, width: Int, height: Int): FloatArray {
-        val dsW = (width + 3) / 4
-        val dsH = (height + 3) / 4
-        val rawHighlights = FloatArray(dsW * dsH)
+    private data class BloomMap(val pixels: FloatArray, val width: Int, val firstX: Int, val firstY: Int, val block: Int) {
+        fun at(x: Int, y: Int): Float = pixels[(Math.floorDiv(y, block) - firstY) * width + Math.floorDiv(x, block) - firstX]
+    }
 
-        // Step 1: Detect specular highlights in 4x4 blocks
-        for (dy in 0 until dsH) {
-            val syBase = dy * 4
-            for (dx in 0 until dsW) {
-                val sxBase = dx * 4
-                var maxHighlight = 0f
-                val yLimit = min(height, syBase + 4)
-                val xLimit = min(width, sxBase + 4)
-
-                for (sy in syBase until yLimit) {
-                    val row = sy * width
-                    for (sx in sxBase until xLimit) {
-                        val p = src[row + sx]
-                        val r = (p ushr 16) and 0xFF
-                        val g = (p ushr 8) and 0xFF
-                        val b = p and 0xFF
-                        val lum = (r * 299 + g * 587 + b * 114) / 1000
-                        if (lum > 212) {
-                            val strength = (lum - 212f) / 43f
-                            if (strength > maxHighlight) {
-                                maxHighlight = strength
-                            }
-                        }
-                    }
+    private suspend fun computeHalationBloomMap(src: IntArray, width: Int, height: Int, originX: Int, originY: Int, block: Int): BloomMap {
+        val firstX = Math.floorDiv(originX, block)
+        val firstY = Math.floorDiv(originY, block)
+        val dsW = Math.floorDiv(originX + width - 1, block) - firstX + 1
+        val dsH = Math.floorDiv(originY + height - 1, block) - firstY + 1
+        val highlights = FloatArray(dsW * dsH)
+        for (y in 0 until height) {
+            currentCoroutineContext().ensureActive()
+            val blockRow = (Math.floorDiv(originY + y, block) - firstY) * dsW
+            for (x in 0 until width) {
+                val pixel = src[y * width + x]
+                val lum = (((pixel ushr 16) and 255) * 299 + ((pixel ushr 8) and 255) * 587 + (pixel and 255) * 114) / 1000
+                if (lum > 212) {
+                    val index = blockRow + Math.floorDiv(originX + x, block) - firstX
+                    highlights[index] = max(highlights[index], (lum - 212f) / 43f)
                 }
-                rawHighlights[dy * dsW + dx] = maxHighlight
             }
         }
-
-        // Step 2: 2-Pass separable 5-tap Gaussian-like diffusion blur
-        val blurredH = FloatArray(dsW * dsH)
+        val horizontal = FloatArray(dsW * dsH)
+        val result = FloatArray(dsW * dsH)
+        val weights = floatArrayOf(.07f, .24f, .38f, .24f, .07f)
         for (y in 0 until dsH) {
-            val row = y * dsW
+            currentCoroutineContext().ensureActive()
             for (x in 0 until dsW) {
-                var acc = rawHighlights[row + x] * 0.38f
-                if (x > 0) acc += rawHighlights[row + x - 1] * 0.24f
-                if (x < dsW - 1) acc += rawHighlights[row + x + 1] * 0.24f
-                if (x > 1) acc += rawHighlights[row + x - 2] * 0.07f
-                if (x < dsW - 2) acc += rawHighlights[row + x + 2] * 0.07f
-                blurredH[row + x] = acc
+                for (offset in -2..2) if (x + offset in 0 until dsW) {
+                    horizontal[y * dsW + x] += highlights[y * dsW + x + offset] * weights[offset + 2]
+                }
             }
         }
-
-        val finalMap = FloatArray(dsW * dsH)
         for (y in 0 until dsH) {
+            currentCoroutineContext().ensureActive()
             for (x in 0 until dsW) {
-                var acc = blurredH[y * dsW + x] * 0.38f
-                if (y > 0) acc += blurredH[(y - 1) * dsW + x] * 0.24f
-                if (y < dsH - 1) acc += blurredH[(y + 1) * dsW + x] * 0.24f
-                if (y > 1) acc += blurredH[(y - 2) * dsW + x] * 0.07f
-                if (y < dsH - 2) acc += blurredH[(y + 2) * dsW + x] * 0.07f
-                finalMap[y * dsW + x] = acc
+                for (offset in -2..2) if (y + offset in 0 until dsH) {
+                    result[y * dsW + x] += horizontal[(y + offset) * dsW + x] * weights[offset + 2]
+                }
             }
         }
-
-        return finalMap
+        return BloomMap(result, dsW, firstX, firstY, block)
     }
 
     // =========================================================================
@@ -352,11 +372,11 @@ object FilmEngine {
     // =========================================================================
     private suspend fun processKodachromeChunk(
         src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int,
-        intensity: Float, grainIntensity: Float
+        intensity: Float, grainIntensity: Float, coordinates: Coordinates
     ) {
         for (y in startY until endY) {
             currentCoroutineContext().ensureActive()
-            var rngState = (y * 31337 + 1013904223)
+            val grainY = coordinates.y(y)
             val rowOffset = y * width
 
             for (x in 0 until width) {
@@ -398,9 +418,7 @@ object FilmEngine {
 
                 // Fine organic dye cloud grain (ISO 64)
                 val midtoneWeight = (1.0f - abs(lum - 128f) / 128f).coerceAtLeast(0f)
-                rngState = rngState xor (rngState shl 13)
-                rngState = rngState xor (rngState ushr 17)
-                rngState = rngState xor (rngState shl 5)
+                val rngState = grainHash(coordinates.x(x), grainY, 1013904223)
 
                 val noiseVal = ((rngState and 0x7FFF) % 25) - 12
                 val dyeGrain = noiseVal * midtoneWeight * 0.48f * grainIntensity
@@ -423,11 +441,11 @@ object FilmEngine {
     // =========================================================================
     private suspend fun processPortraChunk(
         src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int,
-        intensity: Float, grainIntensity: Float
+        intensity: Float, grainIntensity: Float, coordinates: Coordinates
     ) {
         for (y in startY until endY) {
             currentCoroutineContext().ensureActive()
-            var rngState = (y * 39829 + 1729481)
+            val grainY = coordinates.y(y)
             val rowOffset = y * width
 
             for (x in 0 until width) {
@@ -464,9 +482,7 @@ object FilmEngine {
                 // Kodak T-GRAIN (Tabular grain) simulation:
                 // Silky, uniform micro-structure with minimal clumping
                 val midtoneWeight = (1.0f - abs(lum - 128f) / 128f).coerceAtLeast(0f).pow(1.3f)
-                rngState = rngState xor (rngState shl 13)
-                rngState = rngState xor (rngState ushr 17)
-                rngState = rngState xor (rngState shl 5)
+                val rngState = grainHash(coordinates.x(x), grainY, 1729481)
 
                 val noiseVal = ((rngState and 0x7FFF) % 19) - 9
                 val tGrain = noiseVal * midtoneWeight * 0.42f * grainIntensity
@@ -489,11 +505,11 @@ object FilmEngine {
     // =========================================================================
     private suspend fun processVelviaChunk(
         src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int,
-        intensity: Float, grainIntensity: Float
+        intensity: Float, grainIntensity: Float, coordinates: Coordinates
     ) {
         for (y in startY until endY) {
             currentCoroutineContext().ensureActive()
-            var rngState = (y * 53171 + 2491823)
+            val grainY = coordinates.y(y)
             val rowOffset = y * width
 
             for (x in 0 until width) {
@@ -534,9 +550,7 @@ object FilmEngine {
                 // Microscopic ISO 50 slide dye grain (ultra-fine)
                 val lum = (filmR * 299f + filmG * 587f + filmB * 114f) / 1000f
                 val midtoneWeight = (1.0f - abs(lum - 128f) / 128f).coerceAtLeast(0f)
-                rngState = rngState xor (rngState shl 13)
-                rngState = rngState xor (rngState ushr 17)
-                rngState = rngState xor (rngState shl 5)
+                val rngState = grainHash(coordinates.x(x), grainY, 2491823)
 
                 val noiseVal = ((rngState and 0x7FFF) % 11) - 5
                 val microGrain = noiseVal * midtoneWeight * 0.28f * grainIntensity
@@ -559,15 +573,12 @@ object FilmEngine {
     // =========================================================================
     private suspend fun processCineStillChunk(
         src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int, intensity: Float,
-        halationMap: FloatArray, dsWidth: Int, grainIntensity: Float
+        halationMap: BloomMap?, grainIntensity: Float, glowIntensity: Float, coordinates: Coordinates
     ) {
-        val hasHalation = halationMap.isNotEmpty()
-
         for (y in startY until endY) {
             currentCoroutineContext().ensureActive()
-            var rngState = (y * 62723 + 3184917)
+            val grainY = coordinates.y(y)
             val rowOffset = y * width
-            val dy = y / 4
 
             for (x in 0 until width) {
                 val idx = rowOffset + x
@@ -582,21 +593,12 @@ object FilmEngine {
                 var filmG = cinestillGreenLut[g].toFloat()
                 var filmB = cinestillBlueLut[b].toFloat()
 
-                // Authentic Optical Red Halation Bloom:
-                // Photons scatter off the anti-halation pressure plate into the bottom red layer
-                if (hasHalation) {
-                    val dx = x / 4
-                    val mapIdx = dy * dsWidth + dx
-                    if (mapIdx in halationMap.indices) {
-                        val bloom = halationMap[mapIdx]
-                        if (bloom > 0.04f) {
-                            val halationR = bloom * 88f
-                            val halationG = bloom * 16f
-                            val halationB = bloom * 5f
-                            filmR = (filmR + halationR).coerceAtMost(255f)
-                            filmG = (filmG + halationG).coerceAtMost(255f)
-                            filmB = (filmB + halationB).coerceAtMost(255f)
-                        }
+                if (halationMap != null) {
+                    val bloom = halationMap.at(coordinates.originX + x, coordinates.originY + y)
+                    if (bloom > 0.04f) {
+                        filmR = (filmR + bloom * 88f * glowIntensity).coerceAtMost(255f)
+                        filmG = (filmG + bloom * 16f * glowIntensity).coerceAtMost(255f)
+                        filmB = (filmB + bloom * 5f * glowIntensity).coerceAtMost(255f)
                     }
                 }
 
@@ -608,9 +610,7 @@ object FilmEngine {
                     ((255f - lum) / 115f).coerceAtLeast(0f)
                 }
 
-                rngState = rngState xor (rngState shl 13)
-                rngState = rngState xor (rngState ushr 17)
-                rngState = rngState xor (rngState shl 5)
+                val rngState = grainHash(coordinates.x(x), grainY, 3184917)
 
                 val noiseVal = ((rngState and 0x7FFF) % 35) - 17
                 val cineGrain = noiseVal * grainWeight * 0.72f * grainIntensity
@@ -633,11 +633,11 @@ object FilmEngine {
     // =========================================================================
     private suspend fun processPro400hChunk(
         src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int,
-        intensity: Float, grainIntensity: Float
+        intensity: Float, grainIntensity: Float, coordinates: Coordinates
     ) {
         for (y in startY until endY) {
             currentCoroutineContext().ensureActive()
-            var rngState = (y * 41143 + 1883921)
+            val grainY = coordinates.y(y)
             val rowOffset = y * width
 
             for (x in 0 until width) {
@@ -675,9 +675,7 @@ object FilmEngine {
                 val lum = (filmR * 299f + filmG * 587f + filmB * 114f) / 1000f
                 val midtoneWeight = (1.0f - abs(lum - 128f) / 128f).coerceAtLeast(0f)
 
-                rngState = rngState xor (rngState shl 13)
-                rngState = rngState xor (rngState ushr 17)
-                rngState = rngState xor (rngState shl 5)
+                val rngState = grainHash(coordinates.x(x), grainY, 1883921)
 
                 val noiseVal = ((rngState and 0x7FFF) % 23) - 11
                 val proGrain = noiseVal * midtoneWeight * 0.44f * grainIntensity
@@ -700,11 +698,11 @@ object FilmEngine {
     // =========================================================================
     private suspend fun processIlfordHp5Chunk(
         src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int,
-        intensity: Float, grainIntensity: Float
+        intensity: Float, grainIntensity: Float, coordinates: Coordinates
     ) {
         for (y in startY until endY) {
             currentCoroutineContext().ensureActive()
-            var rngState = (y * 45293 + 1664525)
+            val grainY = coordinates.y(y)
             val rowOffset = y * width
 
             for (x in 0 until width) {
@@ -727,9 +725,7 @@ object FilmEngine {
                     ((255 - filmVal) / 135f).coerceAtLeast(0f).pow(0.85f)
                 }.coerceIn(0f, 1f)
 
-                rngState = rngState xor (rngState shl 13)
-                rngState = rngState xor (rngState ushr 17)
-                rngState = rngState xor (rngState shl 5)
+                val rngState = grainHash(coordinates.x(x), grainY, 1664525)
 
                 val noiseVal = ((rngState and 0x7FFF) % 43) - 21
                 val grainDelta = (noiseVal * grainWeight * 1.35f * grainIntensity).toInt()
@@ -749,13 +745,13 @@ object FilmEngine {
     // =========================================================================
     private suspend fun processTriXChunk(
         src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int,
-        intensity: Float, grainIntensity: Float
+        intensity: Float, grainIntensity: Float, coordinates: Coordinates
     ) {
         for (y in startY until endY) {
             currentCoroutineContext().ensureActive()
-            var rngState = (y * 58211 + 2938171)
+            val grainY = coordinates.y(y)
             val rowOffset = y * width
-            val blockY = y shr 1
+            val blockY = grainY shr 1
 
             for (x in 0 until width) {
                 val idx = rowOffset + x
@@ -778,14 +774,12 @@ object FilmEngine {
                 }.coerceIn(0f, 1f)
 
                 // High-speed XorShift random step for base crystal
-                rngState = rngState xor (rngState shl 13)
-                rngState = rngState xor (rngState shl 17)
-                rngState = rngState xor (rngState ushr 5)
+                val rngState = grainHash(coordinates.x(x), grainY, 2938171)
 
                 val crystalNoise = ((rngState and 0x7FFF) % 39) - 19
 
                 // Spatial 2x2 clumping hash for tactile metallic silver filaments (D-76 grit)
-                val blockX = x shr 1
+                val blockX = coordinates.x(x) shr 1
                 val clumpHash = (blockX * 374761393 + blockY * 668265263) xor 0x5BF03635
                 val clumpNoise = ((clumpHash and 0x7FFF) % 25) - 12
 
@@ -801,4 +795,62 @@ object FilmEngine {
             }
         }
     }
+
+    private suspend fun processNewFilmChunk(
+        src: IntArray, dst: IntArray, width: Int, startY: Int, endY: Int,
+        intensity: Float, grainIntensity: Float, coordinates: Coordinates, preset: FilmPreset
+    ) {
+        for (y in startY until endY) {
+            currentCoroutineContext().ensureActive()
+            val grainY = coordinates.y(y)
+            for (x in 0 until width) {
+                val index = y * width + x
+                val pixel = src[index]
+                val r = (pixel ushr 16) and 255
+                val g = (pixel ushr 8) and 255
+                val b = pixel and 255
+                var filmR: Float
+                var filmG: Float
+                var filmB: Float
+                val grainAmount: Float
+                when (preset) {
+                    FilmPreset.GOLD_200 -> {
+                        filmR = goldRedLut[r].toFloat()
+                        filmG = goldGreenLut[g].toFloat()
+                        filmB = goldBlueLut[b].toFloat()
+                        grainAmount = 2.4f
+                    }
+                    FilmPreset.ILFORD_DELTA_100 -> {
+                        val luminance = ((r * 299 + g * 587 + b * 114) / 1000).coerceIn(0, 255)
+                        filmR = deltaToneLut[luminance].toFloat()
+                        filmG = filmR
+                        filmB = filmR
+                        grainAmount = 1.8f
+                    }
+                    FilmPreset.EKTACHROME_E100 -> {
+                        filmR = ektachromeToneLut[r].toFloat()
+                        filmG = ektachromeToneLut[g].toFloat()
+                        filmB = ektachromeToneLut[b].toFloat()
+                        val luminance = filmR * .299f + filmG * .587f + filmB * .114f
+                        filmR = luminance + (filmR - luminance) * 1.06f
+                        filmG = luminance + (filmG - luminance) * 1.06f
+                        filmB = luminance + (filmB - luminance) * 1.06f
+                        grainAmount = 1.4f
+                    }
+                    else -> error("Unexpected film preset")
+                }
+                val luminance = filmR * .299f + filmG * .587f + filmB * .114f
+                val midtoneWeight = (1f - abs(luminance - 128f) / 128f).coerceIn(0f, 1f)
+                val noise = ((grainHash(coordinates.x(x), grainY, preset.ordinal * 827 + 27183) and 0x7FFF) / 16383.5f - 1f) * grainAmount * grainIntensity * midtoneWeight
+                filmR = (filmR + noise).coerceIn(0f, 255f)
+                filmG = (filmG + noise).coerceIn(0f, 255f)
+                filmB = (filmB + noise).coerceIn(0f, 255f)
+                val outR = (r + (filmR - r) * intensity).toInt().coerceIn(0, 255)
+                val outG = (g + (filmG - g) * intensity).toInt().coerceIn(0, 255)
+                val outB = (b + (filmB - b) * intensity).toInt().coerceIn(0, 255)
+                dst[index] = (pixel and -0x1000000) or (outR shl 16) or (outG shl 8) or outB
+            }
+        }
+    }
+
 }

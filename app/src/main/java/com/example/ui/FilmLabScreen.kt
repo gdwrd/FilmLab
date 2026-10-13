@@ -3,6 +3,7 @@ package com.example.ui
 import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.ClipData
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Build
@@ -51,6 +52,11 @@ import androidx.compose.material.icons.filled.Compare
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Crop
+import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.automirrored.filled.Redo
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -60,6 +66,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
@@ -76,7 +83,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.rotate
@@ -110,7 +116,9 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
+import com.example.film.FilmEngine
 import com.example.film.FilmPreset
+import com.example.film.CropSettings
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -125,6 +133,10 @@ fun FilmLabScreen(viewModel: FilmLabViewModel, modifier: Modifier = Modifier) {
     val foldable = rememberFoldableLayoutState()
     val zoom = rememberZoomPanState()
     var sheet by rememberSaveable { mutableStateOf<String?>(null) }
+    var destination by rememberSaveable { mutableStateOf("editor") }
+    var lookId by rememberSaveable { mutableStateOf<String?>(null) }
+    var removeId by rememberSaveable { mutableStateOf<String?>(null) }
+    var displayedPhotoId by remember { mutableStateOf(state.photoId) }
 
     val gallery = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) {
         it?.let(viewModel::onImagePicked)
@@ -132,9 +144,15 @@ fun FilmLabScreen(viewModel: FilmLabViewModel, modifier: Modifier = Modifier) {
     val files = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
         it?.let(viewModel::onImagePicked)
     }
+    val reopen = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
+        it?.let(viewModel::reopenOriginal)
+    }
     val savePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) viewModel.saveToGallery(context)
-        else scope.launch { snackbar.showSnackbar("Allow storage access to save a copy on this Android version.") }
+        else scope.launch {
+            snackbar.currentSnackbarData?.dismiss()
+            snackbar.showSnackbar("Allow storage access to save a copy on this Android version.")
+        }
     }
     val saveCopy = {
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
@@ -142,87 +160,186 @@ fun FilmLabScreen(viewModel: FilmLabViewModel, modifier: Modifier = Modifier) {
         ) savePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
         else viewModel.saveToGallery(context)
     }
-
-    LaunchedEffect(state.baseBitmap) { zoom.resetImmediate() }
-    LaunchedEffect(state.errorMessage) {
-        state.errorMessage?.let {
-            snackbar.showSnackbar(it)
-            viewModel.dismissError()
+    val closeSheet = {
+        if (sheet == "adjust") viewModel.finishAdjustment()
+        sheet = null
+    }
+    val openExport = {
+        viewModel.prepareExport()
+        sheet = "export"
+    }
+    val viewCopy: (android.net.Uri) -> Unit = { uri ->
+        try {
+            context.startActivity(Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "image/jpeg")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            })
+        } catch (_: ActivityNotFoundException) {
+            scope.launch { snackbar.showSnackbar("Saved to gallery. No photo viewer is installed.") }
+        } catch (_: SecurityException) {
+            scope.launch { snackbar.showSnackbar("Saved to gallery. Open your gallery to view the copy.") }
         }
     }
-    LaunchedEffect(state.saveStatus) {
+    LaunchedEffect(state.shareUri) {
+        state.shareUri?.let { uri ->
+            try {
+                context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                    type = "image/jpeg"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    clipData = ClipData.newUri(context.contentResolver, "Edited photograph", uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }, "Share photo"))
+            } catch (_: ActivityNotFoundException) {
+                snackbar.currentSnackbarData?.dismiss()
+                snackbar.showSnackbar("No sharing app is installed. Save a copy to your gallery instead.")
+            } catch (_: SecurityException) {
+                snackbar.currentSnackbarData?.dismiss()
+                snackbar.showSnackbar("This copy could not be shared. Try saving it to your gallery.")
+            } finally {
+                viewModel.dismissShare()
+            }
+        }
+    }
+    LaunchedEffect(state.isImporting, state.photoId) {
+        if (state.isImporting || state.photoId != displayedPhotoId) {
+            sheet = null
+            destination = "editor"
+            lookId = null
+            removeId = null
+        }
+        displayedPhotoId = state.photoId
+    }
+    LaunchedEffect(state.baseBitmap, state.crop) { zoom.resetImmediate() }
+    LaunchedEffect(state.errorMessage, state.saveStatus, state.removedEditTitle, state.removedEditId, sheet) {
+        state.errorMessage?.let { message ->
+            snackbar.currentSnackbarData?.dismiss()
+            snackbar.showSnackbar(message)
+            if (viewModel.uiState.value.errorMessage == message) viewModel.dismissError()
+            return@LaunchedEffect
+        }
+        state.removedEditTitle?.let { title ->
+            val removalId = state.removedEditId
+            snackbar.currentSnackbarData?.dismiss()
+            val result = snackbar.showSnackbar("Removed $title", actionLabel = "Undo", duration = SnackbarDuration.Long)
+            if (viewModel.uiState.value.removedEditId == removalId && viewModel.uiState.value.removedEditTitle == title) {
+                if (result == SnackbarResult.ActionPerformed) viewModel.undoRemoveRecentEdit()
+                else viewModel.dismissRemovedEdit()
+            }
+            return@LaunchedEffect
+        }
+        if (sheet == "export") return@LaunchedEffect
         when (val result = state.saveStatus) {
             is SaveStatus.Success -> {
-                if (snackbar.showSnackbar(result.message, actionLabel = "View") == SnackbarResult.ActionPerformed) {
-                    try {
-                        context.startActivity(Intent(Intent.ACTION_VIEW).apply {
-                            setDataAndType(result.uri, "image/jpeg")
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        })
-                    } catch (_: ActivityNotFoundException) {
-                        snackbar.showSnackbar("Saved to gallery. No photo viewer is installed.")
-                    } catch (_: SecurityException) {
-                        snackbar.showSnackbar("Saved to gallery. Open your gallery to view the copy.")
-                    }
+                if (snackbar.showSnackbar(result.message, actionLabel = "View", duration = SnackbarDuration.Long) == SnackbarResult.ActionPerformed) {
+                    viewCopy(result.uri)
                 }
-                viewModel.dismissSaveStatus()
+                if (viewModel.uiState.value.saveStatus == result) viewModel.dismissSaveStatus()
             }
             is SaveStatus.Error -> {
+                snackbar.currentSnackbarData?.dismiss()
                 snackbar.showSnackbar(result.error)
-                viewModel.dismissSaveStatus()
+                if (viewModel.uiState.value.saveStatus == result) viewModel.dismissSaveStatus()
             }
             else -> Unit
         }
     }
-    BackHandler(enabled = (state.isImporting || !state.showWelcome) && sheet == null) {
-        viewModel.openWelcome()
+    BackHandler(enabled = sheet == null && (destination != "editor" || state.isImporting || !state.showWelcome)) {
+        if (destination != "editor") destination = "editor" else viewModel.openWelcome()
     }
 
     Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding()) {
         when {
             state.isImporting -> OpeningPhoto()
             state.showWelcome || state.baseBitmap == null -> WelcomeScreen(
-                hasDraft = state.baseBitmap != null,
-                foldable = foldable,
-                onContinue = viewModel::resumeEditing,
-                onChoose = { gallery.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                onBrowse = { files.launch(arrayOf("*/*")) }
+                state = state, foldable = foldable,
+                onContinue = { destination = "editor"; viewModel.resumeEditing() },
+                onChoose = { destination = "editor"; gallery.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                onBrowse = { destination = "editor"; files.launch(arrayOf("*/*")) },
+                onOpenRecent = { destination = "editor"; viewModel.openRecentEdit(it) },
+                onRemoveRecent = { removeId = it }
+            )
+            destination == "looks" || destination == "mylooks" -> AllLooksScreen(
+                state, initialMyLooks = destination == "mylooks", onBack = { destination = "editor" },
+                onPreset = { viewModel.selectPreset(it); destination = "editor" },
+                onFavourite = viewModel::toggleFavourite,
+                onApplyLook = { viewModel.applyLook(it); destination = "editor" },
+                onSaveLook = { lookId = null; sheet = "recipe" },
+                onManageLook = { lookId = it; sheet = "manage" }
+            )
+            destination == "crop" -> CropScreen(
+                state, foldable, onCancel = { destination = "editor" },
+                onApply = { viewModel.applyCrop(it); destination = "editor" }
             )
             else -> Column(Modifier.fillMaxSize()) {
                 EditorToolbar(
                     saving = state.saveStatus is SaveStatus.Saving,
                     canSave = !state.isProcessing && !state.isImporting,
-                    onBack = viewModel::openWelcome,
-                    onSave = saveCopy
+                    canUndo = state.canUndo, canRedo = state.canRedo,
+                    onBack = viewModel::openWelcome, onSave = openExport,
+                    onUndo = viewModel::undo, onRedo = viewModel::redo
                 )
                 EditorLayout(
-                    state = state,
-                    foldable = foldable,
-                    zoom = zoom,
+                    state, foldable, zoom,
                     onPreset = { viewModel.setComparing(false); viewModel.selectPreset(it) },
                     onStrength = viewModel::setIntensity,
+                    onStrengthStart = viewModel::beginAdjustment, onStrengthEnd = viewModel::finishAdjustment,
                     onCompare = viewModel::setComparing,
                     onAdjust = { viewModel.setComparing(false); sheet = "adjust" },
-                    onInfo = { sheet = "info" },
-                    modifier = Modifier.weight(1f)
+                    onLooks = { destination = "looks" },
+                    onCrop = { viewModel.setComparing(false); destination = "crop" },
+                    onMore = { sheet = "more" }, modifier = Modifier.weight(1f)
                 )
             }
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(12.dp))
     }
-
-    if (sheet == "adjust" && state.baseBitmap != null) {
-        AdjustSheet(state, viewModel::setGrainIntensity, viewModel::resetAdjustments) { sheet = null }
-    }
-    if (sheet == "info" && state.baseBitmap != null) {
-        PhotoInfoSheet(state) { sheet = null }
+    if (!state.isImporting) {
+        if (sheet == "adjust" && state.baseBitmap != null) {
+            AdjustSheet(state, viewModel::setExposure, viewModel::setWarmth, viewModel::setGrainIntensity,
+                viewModel::setGlowIntensity, viewModel::beginAdjustment, viewModel::finishAdjustment,
+                viewModel::resetAdjustments, closeSheet)
+        }
+        if (sheet == "info" && state.baseBitmap != null) PhotoInfoSheet(state, closeSheet)
+        if (sheet == "more") PhotoOptionsSheet(
+            onSaveLook = { lookId = null; sheet = "recipe" },
+            onShare = openExport, onInfo = { viewModel.prepareExport(); sheet = "info" }, onDismiss = closeSheet
+        )
+        if (sheet == "recipe") SaveLookSheet(
+            state, state.savedLooks.firstOrNull { it.id == lookId },
+            onSave = { name -> viewModel.saveLook(name, lookId) },
+            onSaved = { sheet = null; destination = "mylooks" }, onDismiss = closeSheet
+        )
+        if (sheet == "manage") state.savedLooks.firstOrNull { it.id == lookId }?.let { look ->
+            ManageLookSheet(look, onRename = { sheet = "recipe" },
+                onDelete = { viewModel.deleteLook(look.id); sheet = null }, onDismiss = closeSheet)
+        }
+        if (sheet == "export" && state.baseBitmap != null) ExportSheet(
+            state, onSize = viewModel::setExportSize, onSave = saveCopy,
+            onShare = {
+                val saved = state.saveStatus as? SaveStatus.Success
+                if (saved != null) viewModel.shareSavedCopy(saved.uri) else viewModel.sharePhoto(context)
+            }, onView = viewCopy,
+            onReopen = { sheet = null; reopen.launch(arrayOf("*/*")) },
+            onCancel = { viewModel.cancelExport(); sheet = null },
+            onRetry = { viewModel.dismissSaveStatus(); saveCopy() },
+            onDismiss = { if (state.saveStatus !is SaveStatus.Saving) { viewModel.dismissSaveStatus(); sheet = null } }
+        )
+        state.recentEdits.firstOrNull { it.id == removeId }?.let { edit ->
+            AlertDialog(
+                onDismissRequest = { removeId = null }, title = { Text("Remove this edit?") },
+                text = { Text("${edit.title}\n\nYour original and saved copies stay in your gallery.") },
+                confirmButton = { TextButton({ viewModel.removeRecentEdit(edit.id); removeId = null }) { Text("Remove edit") } },
+                dismissButton = { TextButton({ removeId = null }) { Text("Cancel") } }
+            )
+        }
     }
 }
 
 @Composable
 private fun WelcomeScreen(
-    hasDraft: Boolean, foldable: FoldableLayoutState,
-    onContinue: () -> Unit, onChoose: () -> Unit, onBrowse: () -> Unit
+    state: FilmLabUiState, foldable: FoldableLayoutState,
+    onContinue: () -> Unit, onChoose: () -> Unit, onBrowse: () -> Unit,
+    onOpenRecent: (String) -> Unit, onRemoveRecent: (String) -> Unit
 ) {
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -240,25 +357,25 @@ private fun WelcomeScreen(
             val top = with(density) { ((hinge?.top ?: 0) - origin.y).toDp() }
             val left = with(density) { ((hinge?.left ?: 0) - origin.x).toDp() }
             val actions: @Composable (Modifier) -> Unit = {
-                WelcomeActions(hasDraft, onContinue, onChoose, onBrowse, it)
+                WelcomeActions(state, onContinue, onChoose, onBrowse, onOpenRecent, onRemoveRecent, it)
             }
             when {
                 hinge != null && foldable.isHorizontalHinge && top > 0.dp && top < maxHeight -> Column(Modifier.fillMaxSize()) {
-                    WelcomeArtwork(Modifier.fillMaxWidth().height(top))
+                    WelcomeArtwork(state, Modifier.fillMaxWidth().height(top))
                     Spacer(Modifier.height(with(density) { hinge.height().toDp() }))
                     actions(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()))
                 }
                 hinge != null && foldable.isVerticalHinge && left > 0.dp && left < maxWidth -> Row(Modifier.fillMaxSize()) {
-                    WelcomeArtwork(Modifier.fillMaxHeight().width(left))
+                    WelcomeArtwork(state, Modifier.fillMaxHeight().width(left))
                     Spacer(Modifier.width(with(density) { hinge.width().toDp() }))
                     actions(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()))
                 }
                 maxWidth >= 720.dp -> Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-                    WelcomeArtwork(Modifier.weight(1f))
+                    WelcomeArtwork(state, Modifier.weight(1f))
                     actions(Modifier.weight(1f).verticalScroll(rememberScrollState()))
                 }
                 else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                    WelcomeArtwork(Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 16.dp))
+                    WelcomeArtwork(state, Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 16.dp))
                     actions(Modifier.fillMaxWidth())
                 }
             }
@@ -267,26 +384,32 @@ private fun WelcomeScreen(
 }
 
 @Composable
-private fun WelcomeArtwork(modifier: Modifier) {
+private fun WelcomeArtwork(state: FilmLabUiState, modifier: Modifier) {
+    val recent = state.filmFullBitmap ?: state.recentEdits.firstOrNull()?.thumbnail
     Box(modifier.padding(16.dp), contentAlignment = Alignment.Center) {
-        Box(
+        if (recent != null) Box(Modifier.widthIn(max = 480.dp).fillMaxWidth().clip(RoundedCornerShape(18.dp))) {
+            Image(recent.asImageBitmap(), "Your latest edit", Modifier.fillMaxWidth().aspectRatio(1.5f), contentScale = ContentScale.Crop)
+            Text(state.rawMetadata?.fileName ?: state.recentEdits.firstOrNull()?.title ?: "Your latest edit",
+                Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Color.Black.copy(alpha = .45f)).padding(12.dp),
+                color = Color.White, style = MaterialTheme.typography.labelMedium)
+        } else Box(
             Modifier.widthIn(max = 278.dp).fillMaxWidth().rotate(-4f).shadow(10.dp)
                 .background(Color(0xFFFFFEFA)).padding(9.dp, 9.dp, 9.dp, 24.dp)
         ) {
-            Image(
-                painterResource(R.drawable.welcome_photo), "Espresso in a terracotta cup on a café table",
-                Modifier.fillMaxWidth().aspectRatio(1.5f), contentScale = ContentScale.Crop
-            )
+            Image(painterResource(R.drawable.welcome_photo), "Espresso in a terracotta cup on a café table",
+                Modifier.fillMaxWidth().aspectRatio(1.5f), contentScale = ContentScale.Crop)
         }
     }
 }
 
 @Composable
 private fun WelcomeActions(
-    hasDraft: Boolean, onContinue: () -> Unit, onChoose: () -> Unit, onBrowse: () -> Unit, modifier: Modifier
+    state: FilmLabUiState, onContinue: () -> Unit, onChoose: () -> Unit, onBrowse: () -> Unit,
+    onOpenRecent: (String) -> Unit, onRemoveRecent: (String) -> Unit, modifier: Modifier
 ) {
+    val hasDraft = state.baseBitmap != null
     Column(modifier.padding(horizontal = 30.dp, vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("Make it feel\nlike film.", style = MaterialTheme.typography.headlineLarge, textAlign = TextAlign.Center)
+        Text(if (hasDraft || state.recentEdits.isNotEmpty()) "Your photos." else "Make it feel\nlike film.", style = MaterialTheme.typography.headlineLarge, textAlign = TextAlign.Center)
         Spacer(Modifier.height(16.dp))
         Text(
             "Choose a photo.\nFind your look.", style = MaterialTheme.typography.bodyLarge,
@@ -311,6 +434,7 @@ private fun WelcomeActions(
             }
             TextButton(onBrowse, Modifier.heightIn(min = 48.dp).testTag("browse_files_button")) { Text("Browse files") }
         }
+        RecentEditsList(state.recentEdits, onOpenRecent, onRemoveRecent)
         Row(
             Modifier.padding(top = 22.dp, bottom = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically
@@ -335,22 +459,21 @@ private fun OpeningPhoto() {
 }
 
 @Composable
-private fun EditorToolbar(saving: Boolean, canSave: Boolean, onBack: () -> Unit, onSave: () -> Unit) {
+private fun EditorToolbar(
+    saving: Boolean, canSave: Boolean, canUndo: Boolean, canRedo: Boolean,
+    onBack: () -> Unit, onSave: () -> Unit, onUndo: () -> Unit, onRedo: () -> Unit
+) {
     BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val showTitle = maxWidth >= 360.dp || LocalDensity.current.fontScale < 1.5f
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        val showTitle = maxWidth >= 390.dp && LocalDensity.current.fontScale < 1.4f
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onBack, Modifier.size(48.dp)) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to opening screen") }
-            if (showTitle) Text("FilmLab", Modifier.weight(1f).padding(horizontal = 8.dp), style = MaterialTheme.typography.titleMedium)
+            if (showTitle) Text("FilmLab", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
             else Spacer(Modifier.weight(1f))
-            Button(onSave, enabled = canSave && !saving, colors = actionButtonColors(), modifier = Modifier.heightIn(min = 48.dp).testTag("save_button")) {
-                if (saving) {
-                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.width(8.dp))
-                }
-                Text(if (saving) "Saving…" else "Save copy")
+            IconButton(onUndo, Modifier.size(48.dp).testTag("undo_button"), enabled = canUndo) { Icon(Icons.AutoMirrored.Filled.Undo, "Undo edit") }
+            IconButton(onRedo, Modifier.size(48.dp).testTag("redo_button"), enabled = canRedo) { Icon(Icons.AutoMirrored.Filled.Redo, "Redo edit") }
+            Button(onSave, enabled = canSave && !saving, colors = actionButtonColors(),
+                contentPadding = PaddingValues(horizontal = 12.dp), modifier = Modifier.heightIn(min = 48.dp).testTag("save_button")) {
+                Text(if (saving) "Saving…" else "Save")
             }
         }
     }
@@ -363,9 +486,13 @@ private fun EditorLayout(
     zoom: ZoomPanState,
     onPreset: (FilmPreset) -> Unit,
     onStrength: (Float) -> Unit,
+    onStrengthStart: () -> Unit,
+    onStrengthEnd: () -> Unit,
     onCompare: (Boolean) -> Unit,
     onAdjust: () -> Unit,
-    onInfo: () -> Unit,
+    onLooks: () -> Unit,
+    onCrop: () -> Unit,
+    onMore: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var origin by remember { mutableStateOf(Offset.Zero) }
@@ -379,7 +506,7 @@ private fun EditorLayout(
         val horizontalFold = hinge != null && foldable.isHorizontalHinge && hingeTop > 0.dp && hingeTop < maxHeight
         val verticalFold = hinge != null && foldable.isVerticalHinge && hingeLeft > 0.dp && hingeLeft < maxWidth
         val controls: @Composable (Modifier) -> Unit = { controlsModifier ->
-            FilmControls(state, onPreset, onStrength, onCompare, onAdjust, onInfo, controlsModifier)
+            FilmControls(state, onPreset, onStrength, onStrengthStart, onStrengthEnd, onCompare, onAdjust, onLooks, onCrop, onMore, controlsModifier)
         }
         when {
             horizontalFold -> Column(Modifier.fillMaxSize()) {
@@ -406,19 +533,20 @@ private fun EditorLayout(
 
 @Composable
 private fun PhotoCanvas(state: FilmLabUiState, zoom: ZoomPanState, onCompare: (Boolean) -> Unit, modifier: Modifier) {
-    val base = state.baseBitmap ?: return
+    val base = (if (state.isComparing) state.comparisonBitmap else state.filmFullBitmap) ?: state.baseBitmap ?: return
     val scope = rememberCoroutineScope()
     val currentCompare by rememberUpdatedState(state.isComparing)
+    val hasEdit by rememberUpdatedState(state.editSettings != com.example.film.EditSettings())
     val compare by rememberUpdatedState(onCompare)
     val holdDelay = LocalViewConfiguration.current.longPressTimeoutMillis
-    BoxWithConstraints(modifier.background(Color(0xFF111112)).clipToBounds(), contentAlignment = Alignment.Center) {
+    BoxWithConstraints(modifier.background(Color(FilmEngine.PHOTO_MATTE_COLOR)).clipToBounds(), contentAlignment = Alignment.Center) {
         val aspect = base.width.toFloat() / base.height
         val fitted = if (maxWidth / maxHeight >= aspect) Modifier.fillMaxHeight().aspectRatio(aspect)
         else Modifier.fillMaxWidth().aspectRatio(aspect)
         Box(
             fitted.clipToBounds().onSizeChanged { zoom.updateContainerSize(it.width.toFloat(), it.height.toFloat()) }
                 .pointerInput(zoom) { detectTransformGestures { centroid, pan, scale, _ -> zoom.onTransform(centroid, pan, scale) } }
-                .pointerInput(zoom, base, state.selectedPreset) {
+                .pointerInput(zoom, state.baseBitmap, state.crop, state.selectedPreset) {
                     detectTapGestures(
                         onDoubleTap = { zoom.onDoubleTap(it, scope) },
                         onPress = {
@@ -426,7 +554,7 @@ private fun PhotoCanvas(state: FilmLabUiState, zoom: ZoomPanState, onCompare: (B
                                 var held = false
                                 val hold = launch {
                                     delay(holdDelay)
-                                    if (!zoom.isZoomed && !currentCompare && state.selectedPreset != FilmPreset.ORIGINAL) {
+                                    if (!zoom.isZoomed && !currentCompare && hasEdit) {
                                         held = true
                                         compare(true)
                                     }
@@ -455,9 +583,6 @@ private fun PhotoCanvas(state: FilmLabUiState, zoom: ZoomPanState, onCompare: (B
                 translationY = zoom.offsetY
             }) {
                 Image(base.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
-                state.filmFullBitmap?.let {
-                    Image(it.asImageBitmap(), null, Modifier.fillMaxSize().alpha(if (state.isComparing) 0f else state.intensity), contentScale = ContentScale.Fit)
-                }
             }
         }
         if (state.isComparing) Text(
@@ -477,14 +602,15 @@ private fun PhotoCanvas(state: FilmLabUiState, zoom: ZoomPanState, onCompare: (B
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             CircularProgressIndicator(Modifier.size(14.dp), color = Color.White, strokeWidth = 2.dp)
-            Text("Applying film…", color = Color.White, style = MaterialTheme.typography.labelMedium)
+            Text("Updating photo…", color = Color.White, style = MaterialTheme.typography.labelMedium)
         }
     }
 }
 
-private val filmOrder = listOf(
-    FilmPreset.ORIGINAL, FilmPreset.PORTRA_400, FilmPreset.KODACHROME_64, FilmPreset.FUJI_VELVIA_50,
-    FilmPreset.CINESTILL_800T, FilmPreset.FUJI_PRO_400H, FilmPreset.ILFORD_HP5, FilmPreset.KODAK_TRI_X
+internal val filmOrder: List<FilmPreset> get() = listOf(
+    FilmPreset.ORIGINAL, FilmPreset.PORTRA_400, FilmPreset.GOLD_200, FilmPreset.ILFORD_DELTA_100,
+    FilmPreset.KODACHROME_64, FilmPreset.FUJI_VELVIA_50, FilmPreset.CINESTILL_800T,
+    FilmPreset.FUJI_PRO_400H, FilmPreset.ILFORD_HP5, FilmPreset.KODAK_TRI_X, FilmPreset.EKTACHROME_E100
 )
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -493,19 +619,26 @@ private fun FilmControls(
     state: FilmLabUiState,
     onPreset: (FilmPreset) -> Unit,
     onStrength: (Float) -> Unit,
+    onStrengthStart: () -> Unit,
+    onStrengthEnd: () -> Unit,
     onCompare: (Boolean) -> Unit,
     onAdjust: () -> Unit,
-    onInfo: () -> Unit,
+    onLooks: () -> Unit,
+    onCrop: () -> Unit,
+    onMore: () -> Unit,
     modifier: Modifier
 ) {
     Column(modifier.verticalScroll(rememberScrollState()).padding(vertical = 16.dp)) {
         Column(Modifier.padding(horizontal = 22.dp)) {
-            Text(state.selectedPreset.filmName(), style = MaterialTheme.typography.titleMedium)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(state.selectedPreset.filmName(), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                TextButton(onLooks, Modifier.heightIn(min = 48.dp).testTag("all_looks_button")) { Text("All looks") }
+            }
             Text(state.selectedPreset.filmDescription(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Spacer(Modifier.height(12.dp))
         LazyRow(contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(filmOrder) { preset ->
+            items((listOf(FilmPreset.ORIGINAL) + state.favouritePresets + state.selectedPreset + listOf(FilmPreset.PORTRA_400, FilmPreset.GOLD_200, FilmPreset.ILFORD_DELTA_100)).distinct()) { preset ->
                 FilmThumbnail(preset, state.presetPreviews[preset], state.selectedPreset == preset) { onPreset(preset) }
             }
         }
@@ -516,7 +649,7 @@ private fun FilmControls(
                 Text("${(state.intensity * 100).roundToInt()}%", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Slider(
-                state.intensity, onStrength,
+                state.intensity, { onStrengthStart(); onStrength(it) }, onValueChangeFinished = onStrengthEnd,
                 enabled = state.selectedPreset != FilmPreset.ORIGINAL,
                 modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = "Film strength" }.testTag("intensity_slider")
             )
@@ -524,18 +657,19 @@ private fun FilmControls(
         FlowRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
             EditorAction(
                 "Compare", Icons.Default.Compare, { onCompare(!state.isComparing) }, Modifier.testTag("compare_button"),
-                enabled = state.selectedPreset != FilmPreset.ORIGINAL,
+                enabled = state.baseBitmap != null,
                 selected = state.isComparing,
                 stateLabel = if (state.isComparing) "Showing original" else "Showing edit"
             )
             EditorAction("Adjust", Icons.Default.Tune, onAdjust, Modifier.testTag("adjust_button"))
-            EditorAction("Info", Icons.Default.Info, onInfo, Modifier.testTag("photo_info_button"))
+            EditorAction("Crop", Icons.Default.Crop, onCrop, Modifier.testTag("crop_button"))
+            IconButton(onMore, Modifier.size(48.dp).testTag("more_button")) { Icon(Icons.Default.MoreHoriz, "More photo options") }
         }
     }
 }
 
 @Composable
-private fun FilmThumbnail(preset: FilmPreset, bitmap: Bitmap?, selected: Boolean, onClick: () -> Unit) {
+internal fun FilmThumbnail(preset: FilmPreset, bitmap: Bitmap?, selected: Boolean, onClick: () -> Unit) {
     Column(
         Modifier.width(88.dp).clip(RoundedCornerShape(14.dp))
             .selectable(selected, role = Role.RadioButton, onClick = onClick)
@@ -583,41 +717,16 @@ private fun EditorAction(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AdjustSheet(state: FilmLabUiState, onGrain: (Float) -> Unit, onReset: () -> Unit, onDismiss: () -> Unit) {
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.surface) {
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(bottom = 24.dp)) {
-            SheetHeader("Adjust", onDismiss)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Grain")
-                Text("${(state.grainIntensity * 100).roundToInt()}%", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Slider(
-                state.grainIntensity, onGrain, valueRange = 0f..2f,
-                enabled = state.selectedPreset != FilmPreset.ORIGINAL,
-                modifier = Modifier.heightIn(min = 48.dp).semantics { contentDescription = "Grain amount" }.testTag("grain_slider")
-            )
-            Text(
-                if (state.selectedPreset == FilmPreset.ORIGINAL) "Choose a film look to add grain." else "A little texture. Or a little more.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium
-            )
-            Spacer(Modifier.height(20.dp))
-            TextButton(onReset, Modifier.heightIn(min = 48.dp).testTag("reset_adjustments_button")) { Text("Reset adjustments") }
-        }
-    }
-}
-
-@Composable
-internal fun SheetHeader(title: String, onDismiss: () -> Unit) {
+internal fun SheetHeader(title: String, onDismiss: () -> Unit, actionLabel: String = "Done") {
     Row(Modifier.fillMaxWidth().padding(bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(title, Modifier.weight(1f).semantics { heading() }, style = MaterialTheme.typography.titleLarge)
-        TextButton(onDismiss, Modifier.heightIn(min = 48.dp)) { Text("Done") }
+        TextButton(onDismiss, Modifier.heightIn(min = 48.dp)) { Text(actionLabel) }
     }
 }
 
 @Composable
-private fun actionButtonColors() = ButtonDefaults.buttonColors(
+internal fun actionButtonColors() = ButtonDefaults.buttonColors(
     containerColor = MaterialTheme.colorScheme.primaryContainer,
     contentColor = MaterialTheme.colorScheme.onPrimaryContainer
 )
@@ -631,10 +740,13 @@ internal fun FilmPreset.filmName(): String = when (this) {
     FilmPreset.FUJI_PRO_400H -> "Pro 400H"
     FilmPreset.ILFORD_HP5 -> "Ilford HP5"
     FilmPreset.KODAK_TRI_X -> "Tri-X 400"
+    FilmPreset.GOLD_200 -> "Gold 200"
+    FilmPreset.ILFORD_DELTA_100 -> "Delta 100"
+    FilmPreset.EKTACHROME_E100 -> "Ektachrome E100"
 }
 
 internal fun FilmPreset.filmDescription(): String = when (this) {
-    FilmPreset.ORIGINAL -> "Just as you took it"
+    FilmPreset.ORIGINAL -> "Your photo, without a film look"
     FilmPreset.PORTRA_400 -> "Warm, soft colour"
     FilmPreset.KODACHROME_64 -> "Rich, nostalgic colour"
     FilmPreset.FUJI_VELVIA_50 -> "Vivid and crisp"
@@ -642,4 +754,7 @@ internal fun FilmPreset.filmDescription(): String = when (this) {
     FilmPreset.FUJI_PRO_400H -> "Light, pastel colour"
     FilmPreset.ILFORD_HP5 -> "Soft black and white"
     FilmPreset.KODAK_TRI_X -> "Bold black and white"
+    FilmPreset.GOLD_200 -> "Warm, everyday colour"
+    FilmPreset.ILFORD_DELTA_100 -> "Clean, fine-grain black and white"
+    FilmPreset.EKTACHROME_E100 -> "Neutral, refined slide colour"
 }

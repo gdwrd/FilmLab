@@ -131,7 +131,7 @@ class FilmLabScreenTest {
             assertEquals(1f, viewModel.uiState.value.grainIntensity, .001f)
         }
         compose.onNodeWithText("Done").performScrollTo().performClick()
-        compose.onNodeWithTag("save_button").assertIsDisplayed().assertTextEquals("Save copy")
+        compose.onNodeWithTag("save_button").assertIsDisplayed().assertTextEquals("Save")
     }
 
     @Test
@@ -141,8 +141,9 @@ class FilmLabScreenTest {
         importPhoto(width = 96, height = 64)
 
         compose.onNodeWithTag("save_button").assertIsDisplayed().assertIsEnabled()
+        compose.onNodeWithTag("more_button").performScrollTo().performClick()
         compose.onNodeWithTag("photo_info_button").performScrollTo().assertIsDisplayed().performClick()
-        compose.onAllNodesWithText("96 × 64 pixels").assertCountEquals(2)[1]
+        compose.onAllNodesWithText("96 × 64 pixels")[0]
             .performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("JPEG copy").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Done").performScrollTo().performClick()

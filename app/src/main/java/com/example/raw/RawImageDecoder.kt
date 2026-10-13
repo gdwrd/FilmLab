@@ -9,24 +9,34 @@ import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
 import android.util.Log
+import androidx.annotation.RequiresApi
 import androidx.exifinterface.media.ExifInterface
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
 import java.io.RandomAccessFile
+import java.io.InputStream
+import java.io.OutputStream
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.roundToInt
 
 private const val TAG = "RawImageDecoder"
 private const val MAX_DECODE_DIMENSION = 2560
+private const val MAX_SOURCE_BYTES = 512L * 1024 * 1024
 private const val MIN_FULL_RES_DIMENSION = 500 // Anything smaller is an EXIF thumbnail
 private const val EMBEDDED_PREVIEW_NOTE = "Using the camera's embedded JPEG preview; RAW sensor data was not decoded."
 
 data class RawDecodeResult(
     val bitmap: Bitmap,
-    val metadata: RawMetadata
+    val metadata: RawMetadata,
+    val sourceFile: File? = null,
+    val sourceWidth: Int = bitmap.width,
+    val sourceHeight: Int = bitmap.height
 )
 
 object RawImageDecoder {
@@ -53,129 +63,146 @@ object RawImageDecoder {
         return Pair(fileName, mimeType)
     }
 
-    /** Tries sensor data, embedded previews and Android's supported decoders in order. */
-    suspend fun decodeImage(context: Context, uri: Uri): RawDecodeResult = withContext(Dispatchers.IO) {
-        val (fileName, mimeType) = inspectUri(context, uri)
-        val format = RawFormat.detect(fileName, mimeType)
-
-        // Stage 1: Safely copy stream to local cache file for random access
-        val tempFile = File.createTempFile("raw_decode_", ".tmp", context.cacheDir)
+    /** The returned staged source belongs to the caller when keepSource is true. */
+    suspend fun decodeImage(context: Context, uri: Uri, keepSource: Boolean = false): RawDecodeResult {
+        var completed: RawDecodeResult? = null
         try {
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                tempFile.outputStream().use { output ->
-                    input.copyTo(output)
-                }
-            } ?: throw IllegalStateException("Could not open input stream for $uri")
-
-            // Read EXIF metadata from local file
-            val metadata = extractMetadataFromFile(tempFile, fileName, format)
-
-            var decodedBitmap: Bitmap? = null
-            var processingNote: String? = null
-            var orientationApplied = false
-
-            // Tier 0: Direct Bayer CFA & SubIFD color extraction for DNG (Leica DNG, Adobe DNG)
-            if (format.isRaw) {
+            return withContext(Dispatchers.IO) {
+                val (fileName, mimeType) = inspectUri(context, uri)
+                val format = RawFormat.detect(fileName, mimeType)
+                val job = currentCoroutineContext()
+                val tempFile = File.createTempFile("raw_decode_", ".tmp", context.cacheDir)
+                var previewFile: File? = null
+                var retained: File? = null
+                var ownedBitmap: Bitmap? = null
                 try {
-                    val extracted = DngColorExtractor.extractWithSource(tempFile)
-                    if (extracted != null && isValidResolution(extracted.bitmap)) {
-                        decodedBitmap = extracted.bitmap
-                        processingNote = if (extracted.isSensorData) {
-                            "Developed from RAW sensor data."
-                        } else {
-                            EMBEDDED_PREVIEW_NOTE
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        tempFile.outputStream().use { output -> copyBounded(input, output) { job.ensureActive() } }
+                    } ?: throw IllegalStateException("Could not open the photo.")
+                    val metadata = extractMetadataFromFile(tempFile, fileName, format)
+                    var decodedBitmap: Bitmap? = null
+                    var processingNote: String? = null
+                    var orientationApplied = false
+                    var sourceWidth = 0
+                    var sourceHeight = 0
+                    var decodeFile = tempFile
+
+                    // shortcut: RAW uses previews or Android; add a calibrated decoder when unsupported sensor formats are needed.
+                    if (format.isRaw) {
+                        try {
+                            previewFile = stageLargestEmbeddedJpeg(tempFile) { job.ensureActive() }
+                            previewFile?.let { preview ->
+                                val outerOrientation = runCatching {
+                                    ExifInterface(tempFile).getAttribute(ExifInterface.TAG_ORIENTATION)?.toIntOrNull()?.takeIf { it in 1..8 }
+                                }.getOrNull()
+                                val previewExif = ExifInterface(preview)
+                                val ownOrientation = previewExif.getAttribute(ExifInterface.TAG_ORIENTATION)
+                                    ?.toIntOrNull()?.takeIf { it in 1..8 }
+                                if (ownOrientation == null && outerOrientation != null) previewExif.apply {
+                                    setAttribute(ExifInterface.TAG_ORIENTATION, outerOrientation.toString())
+                                    saveAttributes()
+                                }
+                                val bitmap = decodeWithBitmapFactory(preview).also { ownedBitmap = it }
+                                if (bitmap != null && isValidResolution(bitmap)) {
+                                    decodedBitmap = bitmap
+                                    decodeFile = preview
+                                    processingNote = EMBEDDED_PREVIEW_NOTE
+                                } else {
+                                    bitmap?.recycle()
+                                }
+                            }
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Exception) {
+                            Log.w(TAG, "Embedded JPEG unavailable: ${error.message}")
                         }
                     }
-                } catch (e: Throwable) {
-                    Log.w(TAG, "DngColorExtractor initial pass: ${e.message}")
-                }
-            }
 
-            // Tier 1: Embedded Full-Resolution / High-Resolution Preview Scanner
-            // Sony ARW, Canon CR2, Nikon NEF, Leica DNG embed full 1616x1080 or full 24MP-61MP JPEGs.
-            // Scans all SOI streams and selects the LARGEST resolution image, strictly rejecting thumbnails.
-            if (decodedBitmap == null && format.isRaw) {
-                try {
-                    val largePreview = extractLargestEmbeddedJpeg(tempFile)
-                    if (largePreview != null && isValidResolution(largePreview)) {
-                        decodedBitmap = largePreview
-                        processingNote = EMBEDDED_PREVIEW_NOTE
-                        Log.i(TAG, "Extracted high-resolution master preview (${largePreview.width}x${largePreview.height}) from RAW container.")
+                    if (decodedBitmap == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        try {
+                            val platform = decodeWithImageDecoder(tempFile)
+                            if (!format.isRaw || isValidResolution(platform.bitmap)) {
+                                decodedBitmap = platform.bitmap
+                                ownedBitmap = platform.bitmap
+                                sourceWidth = platform.width
+                                sourceHeight = platform.height
+                                orientationApplied = true
+                            } else {
+                                platform.bitmap.recycle()
+                            }
+                        } catch (error: Exception) {
+                            Log.w(TAG, "ImageDecoder failed: ${error.message}")
+                        }
                     }
-                } catch (e: Throwable) {
-                    Log.w(TAG, "Largest embedded JPEG scan failed: ${e.message}")
-                }
-            }
+                    if (decodedBitmap == null) decodedBitmap = decodeWithBitmapFactory(tempFile).also { ownedBitmap = it }
+                    var bitmap = decodedBitmap ?: throw IllegalStateException("This image format could not be opened.")
+                    job.ensureActive()
 
-            // Tier 2: Android ImageDecoder (API 28+) with strict thumbnail rejection
-            if (decodedBitmap == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                try {
-                    val platformBitmap = decodeWithImageDecoder(context, uri)
-                    if (isValidResolution(platformBitmap)) {
-                        decodedBitmap = platformBitmap
-                        orientationApplied = true
-                    } else {
-                        Log.w(TAG, "ImageDecoder returned thumbnail (${platformBitmap.width}x${platformBitmap.height}). Discarding to find full image.")
+                    if (!orientationApplied) {
+                        val dimensions = orientedDimensions(decodeFile)
+                        sourceWidth = dimensions.first
+                        sourceHeight = dimensions.second
+                        val oriented = applyOrientation(bitmap, decodeFile)
+                        if (oriented !== bitmap) bitmap.recycle()
+                        bitmap = oriented
+                        ownedBitmap = oriented
                     }
-                } catch (e: Throwable) {
-                    Log.w(TAG, "ImageDecoder failed for $uri: ${e.message}")
+                    if (sourceWidth <= 0 || sourceHeight <= 0) {
+                        sourceWidth = bitmap.width
+                        sourceHeight = bitmap.height
+                    }
+                    if (format.isRaw && processingNote == null) {
+                        processingNote = "Android opened this RAW file; it may use the camera's preview."
+                    }
+                    val orientationDegrees = if (processingNote == EMBEDDED_PREVIEW_NOTE) {
+                        when (readOrientation(decodeFile)) { 5, 6 -> 90; 3 -> 180; 7, 8 -> 270; else -> 0 }
+                    } else metadata.orientationDegrees
+                    val rotated = orientationDegrees in listOf(90, 270)
+                    val finalMetadata = metadata.copy(
+                        originalWidth = max(metadata.originalWidth, if (rotated) sourceHeight else sourceWidth),
+                        originalHeight = max(metadata.originalHeight, if (rotated) sourceWidth else sourceHeight),
+                        processingNote = processingNote,
+                        orientationDegrees = orientationDegrees
+                    )
+                    if (keepSource) retained = decodeFile
+                    RawDecodeResult(bitmap, finalMetadata, retained, sourceWidth, sourceHeight).also { completed = it }
+                } finally {
+                    if (tempFile !== retained) tempFile.delete()
+                    if (previewFile !== retained) previewFile?.delete()
+                    if (completed == null && ownedBitmap?.isRecycled == false) ownedBitmap?.recycle()
                 }
             }
-
-            // Tier 3: BitmapFactory decode from tempFile
-            if (decodedBitmap == null) {
-                decodedBitmap = decodeWithBitmapFactory(tempFile)
-            }
-
-            if (decodedBitmap == null) {
-                throw IllegalStateException("Failed to decode image from $uri (Format: ${format.formatName})")
-            }
-
-            if (format.isRaw && processingNote == null) {
-                processingNote = "Android opened this RAW file; it may use the camera's preview."
-            }
-
-            var isColorRecovered = false
-            if (format.isRaw && RawColorRecoveryEngine.isMonochrome(decodedBitmap)) {
-                val (colorBitmap, recovered) = RawColorRecoveryEngine.recoverRealColors(
-                    context = context,
-                    uri = uri,
-                    file = tempFile,
-                    decodedBitmap = decodedBitmap,
-                    metadata = metadata
-                )
-                decodedBitmap = colorBitmap
-                isColorRecovered = recovered
-                if (recovered) {
-                    processingNote = "Colour decoded from RAW sensor data."
-                    orientationApplied = false
-                } else {
-                    processingNote = "$processingNote No colour data was recovered; the monochrome image has been kept."
-                }
-            }
-
-            val dimensionsRotated = orientationApplied && metadata.orientationDegrees in listOf(90, 270)
-            val sourceWidth = if (dimensionsRotated) decodedBitmap.height else decodedBitmap.width
-            val sourceHeight = if (dimensionsRotated) decodedBitmap.width else decodedBitmap.height
-            val finalWidth = max(metadata.originalWidth, sourceWidth)
-            val finalHeight = max(metadata.originalHeight, sourceHeight)
-
-            // ImageDecoder applies EXIF orientation itself; extracted sensor and preview pixels do not.
-            if (!orientationApplied && metadata.orientationDegrees != 0) {
-                decodedBitmap = applyOrientation(decodedBitmap, metadata.orientationDegrees)
-            }
-
-            val finalMetadata = metadata.copy(
-                originalWidth = finalWidth,
-                originalHeight = finalHeight,
-                isColorRecovered = isColorRecovered,
-                processingNote = processingNote
-            )
-
-            RawDecodeResult(bitmap = decodedBitmap, metadata = finalMetadata)
-        } finally {
-            tempFile.delete()
+        } catch (error: Throwable) {
+            // withContext can cancel after decoding but before handing ownership to the caller.
+            completed?.sourceFile?.delete()
+            completed?.bitmap?.recycle()
+            throw error
         }
+    }
+
+    private fun copyBounded(input: InputStream, output: OutputStream, checkActive: () -> Unit) {
+        val buffer = ByteArray(64 * 1024)
+        var total = 0L
+        while (true) {
+            checkActive()
+            val count = input.read(buffer)
+            if (count < 0) break
+            total += count
+            require(total <= MAX_SOURCE_BYTES) { "This photo file is too large to import (maximum 512 MB)." }
+            output.write(buffer, 0, count)
+        }
+        checkActive()
+    }
+
+    private fun readOrientation(file: File): Int = runCatching {
+        ExifInterface(file).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+    }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+
+    private fun orientedDimensions(file: File): Pair<Int, Int> {
+        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, options)
+        return if (readOrientation(file) in 5..8) options.outHeight to options.outWidth
+        else options.outWidth to options.outHeight
     }
 
     private fun isValidResolution(bitmap: Bitmap): Boolean {
@@ -190,94 +217,156 @@ object RawImageDecoder {
         val pixels: Long get() = width.toLong() * height.toLong()
     }
 
-    /**
-     * Scans any RAW file (Sony ARW, Canon CR2, Nikon NEF, Leica DNG) for ALL embedded JPEG streams.
-     * Identifies SOI markers (0xFF 0xD8 0xFF), extracts dimensions from JPEG headers,
-     * rejects small thumbnails (< 500px), and decodes the LARGEST master image.
-     */
+    /** Finds a real JPEG stream without interpreting any RAW sensor bytes. */
     fun extractLargestEmbeddedJpeg(file: File): Bitmap? {
+        val jpeg = stageLargestEmbeddedJpeg(file) {} ?: return null
+        return try { decodeWithBitmapFactory(jpeg) } finally { jpeg.delete() }
+    }
+
+    private fun stageLargestEmbeddedJpeg(file: File, checkActive: () -> Unit): File? {
         if (!file.exists() || file.length() < 1000) return null
-
         val candidates = mutableListOf<JpegStreamCandidate>()
-
         RandomAccessFile(file, "r").use { raf ->
-            val fileLen = raf.length()
             val buffer = ByteArray(256 * 1024)
-            var filePos = 0L
-
-            while (filePos < fileLen - 4) {
-                raf.seek(filePos)
-                val readBytes = raf.read(buffer)
-                if (readBytes < 4) break
-
-                var i = 0
-                while (i < readBytes - 3) {
-                    if (buffer[i] == 0xFF.toByte() && buffer[i + 1] == 0xD8.toByte() && buffer[i + 2] == 0xFF.toByte()) {
-                        val candidateOffset = filePos + i
-                        val dims = readJpegDimensions(raf, candidateOffset)
-                        if (dims != null && dims.first > 0 && dims.second > 0) {
-                            candidates.add(JpegStreamCandidate(candidateOffset, dims.first, dims.second))
+            var position = 0L
+            while (position < raf.length() - 4) {
+                checkActive()
+                raf.seek(position)
+                val count = raf.read(buffer)
+                if (count < 4) break
+                for (i in 0 until count - 3) {
+                    if (buffer[i] == 0xff.toByte() && buffer[i + 1] == 0xd8.toByte() && buffer[i + 2] == 0xff.toByte()) {
+                        val offset = position + i
+                        readJpegDimensions(raf, offset)?.let { (width, height) ->
+                            candidates.add(JpegStreamCandidate(offset, width, height))
+                            // A camera has only a few previews; cap marker-like malformed input.
+                            if (candidates.size > 32) candidates.removeAt(candidates.indices.minBy { candidates[it].pixels })
                         }
                     }
-                    i++
                 }
-                val advance = if (readBytes > 3) readBytes - 3 else readBytes
-                filePos += advance
+                position += count - 3
             }
-
-            // Exclude small thumbnails (< 500px on both dimensions)
-            val fullResCandidates = candidates.filter { it.width >= MIN_FULL_RES_DIMENSION || it.height >= MIN_FULL_RES_DIMENSION }
-            val bestCandidate = fullResCandidates.maxByOrNull { it.pixels } ?: candidates.maxByOrNull { it.pixels } ?: return null
-
-            Log.i(TAG, "Selected largest embedded JPEG at offset ${bestCandidate.offset}: ${bestCandidate.width}x${bestCandidate.height} (${bestCandidate.pixels} pixels)")
-
-            // Decode largest preview with target memory sample sizing
-            val maxDim = max(bestCandidate.width, bestCandidate.height)
-            val sampleSize = if (maxDim > MAX_DECODE_DIMENSION) {
-                (maxDim / MAX_DECODE_DIMENSION).coerceAtLeast(1)
-            } else 1
-
-            val decodeOpts = BitmapFactory.Options().apply {
-                inSampleSize = sampleSize
-                inPreferredConfig = Bitmap.Config.ARGB_8888
-                inMutable = true
+            for (candidate in candidates.sortedByDescending { it.pixels }) {
+                checkActive()
+                val end = jpegEnd(raf, candidate.offset, checkActive) ?: continue
+                val output = File.createTempFile("raw_preview_", ".jpg", file.parentFile)
+                try {
+                    raf.seek(candidate.offset)
+                    output.outputStream().use { stream ->
+                        var remaining = end - candidate.offset
+                        while (remaining > 0) {
+                            checkActive()
+                            val count = raf.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+                            check(count > 0) { "Embedded preview is truncated." }
+                            stream.write(buffer, 0, count)
+                            remaining -= count
+                        }
+                    }
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeFile(output.absolutePath, bounds)
+                    if (bounds.outWidth > 0 && bounds.outHeight > 0) return output
+                } catch (error: Throwable) {
+                    output.delete()
+                    throw error
+                }
+                output.delete()
             }
-
-            val maxBytesToRead = minOf(fileLen - bestCandidate.offset, 32L * 1024 * 1024).toInt()
-            val jpegBytes = ByteArray(maxBytesToRead)
-            raf.seek(bestCandidate.offset)
-            raf.readFully(jpegBytes)
-            return BitmapFactory.decodeByteArray(jpegBytes, 0, maxBytesToRead, decodeOpts)
         }
+        return null
     }
 
-    /**
-     * Reads JPEG dimensions from the embedded stream at offset using BitmapFactory bounds.
-     */
-    private fun readJpegDimensions(raf: RandomAccessFile, offset: Long): Pair<Int, Int>? {
-        return try {
-            val fileLen = raf.length()
-            val sampleLen = minOf(64 * 1024L, fileLen - offset).toInt()
-            if (sampleLen < 16) return null
-            val headerBuf = ByteArray(sampleLen)
-            raf.seek(offset)
-            raf.readFully(headerBuf)
-            val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeByteArray(headerBuf, 0, sampleLen, boundsOpts)
-            if (boundsOpts.outWidth > 0 && boundsOpts.outHeight > 0) {
-                Pair(boundsOpts.outWidth, boundsOpts.outHeight)
-            } else null
-        } catch (e: Exception) {
-            null
+    /** Segment lengths prevent an EXIF thumbnail's EOI from truncating the master JPEG. */
+    private fun jpegEnd(raf: RandomAccessFile, start: Long, checkActive: () -> Unit): Long? {
+        raf.seek(start + 2)
+        var entropy = false
+        var checkedAt = start
+        while (raf.filePointer < raf.length()) {
+            if (raf.filePointer - checkedAt > 64 * 1024) {
+                checkActive()
+                checkedAt = raf.filePointer
+            }
+            var marker: Int
+            if (entropy) {
+                marker = entropyMarker(raf, checkActive) ?: return null
+                entropy = false
+            } else {
+                if (raf.readUnsignedByte() != 0xff) return null
+                do {
+                    if (raf.filePointer >= raf.length()) return null
+                    marker = raf.readUnsignedByte()
+                } while (marker == 0xff)
+            }
+            if (marker == 0xd9) return raf.filePointer
+            if (marker == 0xd8 || marker == 0 || marker in 0xd0..0xd7) return null
+            if (raf.filePointer + 2 > raf.length()) return null
+            val length = raf.readUnsignedShort()
+            if (length < 2 || raf.filePointer + length - 2 > raf.length()) return null
+            raf.seek(raf.filePointer + length - 2)
+            entropy = marker == 0xda
         }
+        return null
     }
+
+    private fun entropyMarker(raf: RandomAccessFile, checkActive: () -> Unit): Int? {
+        val bytes = ByteArray(64 * 1024)
+        var afterFF = false
+        while (raf.filePointer < raf.length()) {
+            checkActive()
+            val start = raf.filePointer
+            val count = raf.read(bytes)
+            if (count <= 0) return null
+            for (i in 0 until count) {
+                val value = bytes[i].toInt() and 255
+                if (afterFF) {
+                    if (value == 255) continue
+                    afterFF = false
+                    if (value == 0 || value in 0xd0..0xd7) continue
+                    raf.seek(start + i + 1)
+                    return value
+                }
+                afterFF = value == 255
+            }
+        }
+        return null
+    }
+
+    /** Header segments may contain large ICC profiles; skip them rather than guessing a header size. */
+    private fun readJpegDimensions(raf: RandomAccessFile, offset: Long): Pair<Int, Int>? = try {
+        raf.seek(offset + 2)
+        var dimensions: Pair<Int, Int>? = null
+        while (raf.filePointer + 4 < raf.length()) {
+            if (raf.readUnsignedByte() != 0xff) break
+            var marker: Int
+            do { marker = raf.readUnsignedByte() } while (marker == 0xff && raf.filePointer < raf.length())
+            if (marker == 0xda || marker == 0xd9 || marker == 0xd8 || marker == 0) break
+            val length = raf.readUnsignedShort()
+            if (length < 2 || raf.filePointer + length - 2 > raf.length()) break
+            if (marker in listOf(0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf)) {
+                if (length < 8) break
+                raf.readUnsignedByte()
+                val height = raf.readUnsignedShort()
+                val width = raf.readUnsignedShort()
+                if (width > 0 && height > 0) dimensions = width to height
+                break
+            }
+            raf.seek(raf.filePointer + length - 2)
+        }
+        dimensions
+    } catch (error: Exception) { null }
 
     /**
      * Decodes using Android P+ ImageDecoder with memory-safe target sample sizing.
      */
-    private fun decodeWithImageDecoder(context: Context, uri: Uri): Bitmap {
-        val source = ImageDecoder.createSource(context.contentResolver, uri)
-        return ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+    private data class PlatformDecode(val bitmap: Bitmap, val width: Int, val height: Int)
+
+    @RequiresApi(Build.VERSION_CODES.P)
+    private fun decodeWithImageDecoder(file: File): PlatformDecode {
+        val source = ImageDecoder.createSource(file)
+        var width = 0
+        var height = 0
+        val bitmap = ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+            width = info.size.width
+            height = info.size.height
             val origWidth = info.size.width
             val origHeight = info.size.height
             val maxDim = max(origWidth, origHeight)
@@ -291,6 +380,7 @@ object RawImageDecoder {
             decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
             decoder.isMutableRequired = true
         }
+        return PlatformDecode(bitmap, width, height)
     }
 
     /**
@@ -306,9 +396,7 @@ object RawImageDecoder {
 
         var sampleSize = 1
         val maxDim = max(boundsOptions.outWidth, boundsOptions.outHeight)
-        if (maxDim > MAX_DECODE_DIMENSION) {
-            sampleSize = maxDim / MAX_DECODE_DIMENSION
-        }
+        while (maxDim / sampleSize > MAX_DECODE_DIMENSION) sampleSize *= 2
 
         val decodeOptions = BitmapFactory.Options().apply {
             inSampleSize = sampleSize.coerceAtLeast(1)
@@ -406,9 +494,9 @@ object RawImageDecoder {
                 ExifInterface.ORIENTATION_NORMAL
             )
             orientationDegrees = when (orientation) {
-                ExifInterface.ORIENTATION_ROTATE_90 -> 90
+                ExifInterface.ORIENTATION_ROTATE_90, ExifInterface.ORIENTATION_TRANSPOSE -> 90
                 ExifInterface.ORIENTATION_ROTATE_180 -> 180
-                ExifInterface.ORIENTATION_ROTATE_270 -> 270
+                ExifInterface.ORIENTATION_ROTATE_270, ExifInterface.ORIENTATION_TRANSVERSE -> 270
                 else -> 0
             }
         } catch (e: Exception) {
@@ -453,9 +541,31 @@ object RawImageDecoder {
         }
     }
 
-    private fun applyOrientation(bitmap: Bitmap, degrees: Int): Bitmap {
-        if (degrees == 0) return bitmap
-        val matrix = Matrix().apply { postRotate(degrees.toFloat()) }
+    private fun applyOrientation(bitmap: Bitmap, file: File): Bitmap {
+        val orientation = try {
+            ExifInterface(file).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+        } catch (error: Exception) {
+            Log.w(TAG, "Could not read orientation: ${error.message}")
+            return bitmap
+        }
+        val matrix = Matrix().apply {
+            when (orientation) {
+                ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> setScale(-1f, 1f)
+                ExifInterface.ORIENTATION_ROTATE_180 -> setRotate(180f)
+                ExifInterface.ORIENTATION_FLIP_VERTICAL -> setScale(1f, -1f)
+                ExifInterface.ORIENTATION_TRANSPOSE -> {
+                    setRotate(90f)
+                    postScale(-1f, 1f)
+                }
+                ExifInterface.ORIENTATION_ROTATE_90 -> setRotate(90f)
+                ExifInterface.ORIENTATION_TRANSVERSE -> {
+                    setRotate(270f)
+                    postScale(-1f, 1f)
+                }
+                ExifInterface.ORIENTATION_ROTATE_270 -> setRotate(270f)
+                else -> return bitmap
+            }
+        }
         return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
     }
 }

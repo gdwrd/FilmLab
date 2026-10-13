@@ -18,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.example.film.PhotoRenderer
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -47,12 +48,19 @@ internal fun PhotoInfoSheet(state: FilmLabUiState, onDismiss: () -> Unit) {
             }
             InfoRow("Film", state.selectedPreset.filmName())
             InfoRow("Save as", "JPEG copy")
-            InfoRow("Export dimensions", "${photo.width} × ${photo.height} pixels")
+            val availableWidth = state.sourceWidth.takeIf { it > 0 } ?: photo.width
+            val availableHeight = state.sourceHeight.takeIf { it > 0 } ?: photo.height
+            InfoRow("Available image", "$availableWidth × $availableHeight pixels")
+            val dimensions = state.exportInfo?.let { it.width to it.height } ?: PhotoRenderer.dimensions(
+                if (state.exportSize == ExportSize.SMALLER) photo.width else availableWidth,
+                if (state.exportSize == ExportSize.SMALLER) photo.height else availableHeight, state.crop,
+                if (state.exportSize == ExportSize.SMALLER || state.exportInfo?.sourceAvailable == false) 2048 else null)
+            InfoRow("Export dimensions", "${dimensions.first} × ${dimensions.second} pixels")
             Spacer(Modifier.height(16.dp))
             Text("Your original photo is never replaced.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(8.dp))
             Text(
-                "Copies are saved at the editing resolution, up to 2,048 pixels on the long edge.",
+                state.exportInfo?.limitation ?: "Largest available keeps the source detail. Smaller copy uses up to 2,048 pixels on the long edge.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

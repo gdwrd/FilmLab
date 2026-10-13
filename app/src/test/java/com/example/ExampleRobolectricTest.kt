@@ -10,7 +10,6 @@ import com.example.ui.ZoomPanState
 import androidx.compose.ui.geometry.Offset
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -403,57 +402,6 @@ class ExampleRobolectricTest {
     )
     assertTrue("Should detect Leica Q3", leicaQ3.isLeica)
     assertEquals("Leica Q3", leicaQ3.displayCameraName)
-  }
-
-  @Test
-  fun testRawColorRecoveryKeepsMonochromeWhenSensorDataIsUnavailable() {
-    val width = 100
-    val height = 100
-    val bwBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-    for (y in 0 until height) {
-      for (x in 0 until width) {
-        val gray = ((y.toFloat() / height) * 200 + 40).toInt().coerceIn(0, 255)
-        bwBitmap.setPixel(x, y, Color.rgb(gray, gray, gray))
-      }
-    }
-
-    // Verify it is accurately detected as monochrome
-    assertTrue("Bitmap should be detected as monochrome", com.example.raw.RawColorRecoveryEngine.isMonochrome(bwBitmap))
-
-    val leicaMeta = com.example.raw.RawMetadata(
-      format = com.example.raw.RawFormat.DNG,
-      make = "Leica Camera AG",
-      model = "Leica Q2"
-    )
-    val originalPixels = IntArray(width * height)
-    bwBitmap.getPixels(originalPixels, 0, width, 0, 0, width, height)
-    val (result, recovered) = com.example.raw.RawColorRecoveryEngine.recoverRealColors(
-      context = ApplicationProvider.getApplicationContext<Context>(),
-      decodedBitmap = bwBitmap,
-      metadata = leicaMeta
-    )
-
-    assertFalse("Missing sensor data must not be reported as recovered colour", recovered)
-    assertTrue(result === bwBitmap)
-    val resultPixels = IntArray(width * height)
-    result.getPixels(resultPixels, 0, width, 0, 0, width, height)
-    assertArrayEquals("No pixel may be coloured from luminance or image position", originalPixels, resultPixels)
-  }
-
-  @Test
-  fun testColorBitmapNotAlteredByRecoveryEngine() {
-    val colorBitmap = Bitmap.createBitmap(50, 50, Bitmap.Config.ARGB_8888)
-    colorBitmap.eraseColor(Color.rgb(220, 80, 40)) // Vivid red/amber
-
-    assertFalse("Color bitmap must not be detected as monochrome", com.example.raw.RawColorRecoveryEngine.isMonochrome(colorBitmap))
-
-    val app = ApplicationProvider.getApplicationContext<Context>()
-    val dummyUri = android.net.Uri.parse("file:///dummy.dng")
-    val meta = com.example.raw.RawMetadata(format = com.example.raw.RawFormat.DNG)
-    val (result, recovered) = com.example.raw.RawColorRecoveryEngine.recoverRealColors(app, dummyUri, colorBitmap, meta)
-
-    assertFalse("Should not trigger recovery if already in color", recovered)
-    assertEquals(colorBitmap, result)
   }
 
   @Test

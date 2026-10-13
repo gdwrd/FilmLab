@@ -3,6 +3,7 @@ package com.example
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.view.WindowManager
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -17,6 +18,7 @@ import com.example.ui.FilmLabViewModel
 import com.example.ui.SaveStatus
 import org.junit.Assert.*
 import org.junit.Rule
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
@@ -24,6 +26,10 @@ import java.io.File
 @RunWith(AndroidJUnit4::class)
 class FilmLabJourneyTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+
+    @Before fun keepScreenAwake() {
+        compose.runOnUiThread { compose.activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+    }
 
     @Test fun editCompareAdjustAndSaveRealCopy() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
@@ -54,10 +60,12 @@ class FilmLabJourneyTest {
             compose.onNodeWithText("Done").performClick()
             compose.onNodeWithTag("save_button").assertIsDisplayed()
             screenshot("editor")
+            compose.onNodeWithTag("more_button").performScrollTo().performClick()
             compose.onNodeWithTag("photo_info_button").performScrollTo().performClick()
             screenshot("info")
             compose.onNodeWithText("Done").performScrollTo().performClick()
             compose.onNodeWithTag("save_button").performClick()
+            compose.onNodeWithTag("export_save_button").performScrollTo().performClick()
             compose.waitUntil(15_000) { viewModel.uiState.value.saveStatus is SaveStatus.Success || viewModel.uiState.value.saveStatus is SaveStatus.Error }
             val result = viewModel.uiState.value.saveStatus
             assertTrue("Gallery write must succeed: " + result, result is SaveStatus.Success)
