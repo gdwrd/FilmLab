@@ -85,8 +85,8 @@ Tests cover film processing and tiled effects, exposure and warmth, crop geometr
 
 Generated test scenes in SamplePhotos.kt are fixtures, not real camera captures or proof of RAW colour accuracy.
 
-The welcome photograph is credited in [assets/PHOTO_CREDIT.md](assets/PHOTO_CREDIT.md).
+The welcome photograph and store screenshot photograph are credited in [assets/PHOTO_CREDIT.md](assets/PHOTO_CREDIT.md).
 
 ## Licence
 
-Copyright 2026 FilmLab contributors. FilmLab's source code and project assets are licensed under the [Apache License 2.0](LICENSE), except the welcome photograph, which is available under CC0 as documented in [assets/PHOTO_CREDIT.md](assets/PHOTO_CREDIT.md).
+Copyright 2026 FilmLab contributors. FilmLab's source code and project assets are licensed under the [Apache License 2.0](LICENSE), except the CC0 welcome photograph and the public-domain photograph shown in the store screenshots. Both photographs are documented in [assets/PHOTO_CREDIT.md](assets/PHOTO_CREDIT.md).

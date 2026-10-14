@@ -19,8 +19,10 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -148,6 +150,24 @@ class FilmLabScreenTest {
         compose.onNodeWithText("JPEG copy").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Done").performScrollTo().performClick()
         compose.onNodeWithTag("save_button").assertIsDisplayed()
+    }
+
+    @Test
+    fun portraitAndLandscapeExportPreviewsDoNotOverlapTheHeadingOrSizeControls() {
+        showScreen()
+        for ((width, height) in listOf(96 to 192, 192 to 96)) {
+            importPhoto(width, height)
+            compose.waitUntil(10_000) { compose.waitForIdle(); !viewModel.uiState.value.isProcessing }
+            compose.onNodeWithTag("save_button").assertIsEnabled().performClick()
+
+            val heading = compose.onNodeWithText("Save & share").assertIsDisplayed().getUnclippedBoundsInRoot()
+            val preview = compose.onNodeWithContentDescription("Edited copy").assertIsDisplayed().getUnclippedBoundsInRoot()
+            val size = compose.onNodeWithTag("export_largest").assertIsDisplayed().getUnclippedBoundsInRoot()
+            assertTrue("Preview overlaps heading for $width × $height", heading.bottom <= preview.top)
+            assertTrue("Preview overlaps size controls for $width × $height", preview.bottom <= size.top)
+
+            compose.onNodeWithText("Done").performClick()
+        }
     }
 
     @Test

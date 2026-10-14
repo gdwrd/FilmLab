@@ -1,0 +1,1 @@
+Enabled release code optimization and resource shrinking to reduce APK size. Fixed portrait export previews overlapping the save controls. Added screenshots of editing, film looks, adjustments, crop, saved looks, recent edits, and export.

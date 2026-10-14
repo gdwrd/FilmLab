@@ -327,7 +327,7 @@ private fun ExportUpdateNotice(state: FilmLabUiState) {
 @Composable
 private fun ExportPreview(state: FilmLabUiState) {
     val bitmap = state.filmFullBitmap ?: state.baseBitmap ?: return
-    Image(bitmap.asImageBitmap(), "Edited copy", Modifier.fillMaxWidth().heightIn(max = 190.dp).aspectRatio(bitmap.width.toFloat() / bitmap.height)
+    Image(bitmap.asImageBitmap(), "Edited copy", Modifier.fillMaxWidth().height(190.dp)
         .clip(RoundedCornerShape(12.dp)), contentScale = ContentScale.Fit)
 }
 
