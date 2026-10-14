@@ -54,7 +54,13 @@ jobs:
           export KEYSTORE_PATH="$RUNNER_TEMP/filmlab-release.jks"
           trap 'rm -f "$KEYSTORE_PATH"' EXIT
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
-          ./gradlew --no-daemon --console=plain --no-configuration-cache :app:assembleRelease :app:lintRelease
+          env -u KEYSTORE_PATH ./gradlew --no-daemon --console=plain --no-configuration-cache :app:assembleRelease :app:lintRelease
+          # Preserve ZIP alignment so F-Droid can reproduce the APK and copy its signature.
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" sign --alignment-preserved true \
+            --ks "$KEYSTORE_PATH" --ks-key-alias upload \
+            --ks-pass env:STORE_PASSWORD --key-pass env:KEY_PASSWORD \
+            --out app/build/outputs/apk/release/app-release.apk \
+            app/build/outputs/apk/release/app-release-unsigned.apk
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk | tee "$RUNNER_TEMP/apk-signature.txt"
           grep -F "Signer #1 certificate SHA-256 digest: $RELEASE_CERT_SHA256" "$RUNNER_TEMP/apk-signature.txt"
       - name: Verify package and prepare release files
@@ -73,7 +79,7 @@ jobs:
           assert apk['versionName'] == tag[1:], 'Tag must match the app versionName.'
           assert apk['versionCode'] > 0, 'versionCode must be positive.'
           Path('release').mkdir()
-          shutil.copyfile(output / apk['outputFile'], f'release/FilmLab-{tag}.apk')
+          shutil.copyfile(output / 'app-release.apk', f'release/FilmLab-{tag}.apk')
           PY
           cd release
           sha256sum "FilmLab-${RELEASE_TAG}.apk" > "FilmLab-${RELEASE_TAG}.apk.sha256"

@@ -1,0 +1,1 @@
+Licensed FilmLab under Apache-2.0 and added its F-Droid listing and build metadata. Removed unused Firebase and Google SDK dependencies.

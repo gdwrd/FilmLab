@@ -61,7 +61,7 @@ Requirements: JDK 21 and Android SDK platform 36.1 / build tools 36.0.0. The che
 
 Release builds use **com.nsheremet.filmlab**. Debug builds install as **FilmLab Preview**, package **com.nsheremet.filmlab.debug**, using the standard Android debug key. They can coexist with the release app. These IDs install separately from older FilmLab builds; private edits and preferences remain in the older installation.
 
-Release signing uses KEYSTORE_PATH, STORE_PASSWORD, and KEY_PASSWORD environment variables. Do not commit signing keys or secrets.
+Without KEYSTORE_PATH, `./gradlew :app:assembleRelease` produces an unsigned release APK for source-build verification. Release signing uses KEYSTORE_PATH, STORE_PASSWORD, and KEY_PASSWORD environment variables. Do not commit signing keys or secrets.
 
 ## GitHub builds and releases
 
@@ -86,3 +86,7 @@ Tests cover film processing and tiled effects, exposure and warmth, crop geometr
 Generated test scenes in SamplePhotos.kt are fixtures, not real camera captures or proof of RAW colour accuracy.
 
 The welcome photograph is credited in [assets/PHOTO_CREDIT.md](assets/PHOTO_CREDIT.md).
+
+## Licence
+
+Copyright 2026 FilmLab contributors. FilmLab's source code and project assets are licensed under the [Apache License 2.0](LICENSE), except the welcome photograph, which is available under CC0 as documented in [assets/PHOTO_CREDIT.md](assets/PHOTO_CREDIT.md).
